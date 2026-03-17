@@ -1,0 +1,268 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Campaign {
+  id                     BigInt                    @id @default(autoincrement())
+  name                   String                    @db.VarChar(120)
+  category               String?                   @db.VarChar(80)
+  targetPlatform         String                    @map("target_platform") @db.VarChar(40)
+  outreachChannelPriority String                   @map("outreach_channel_priority") @db.VarChar(20)
+  status                 String                    @default("ACTIVE") @db.VarChar(20)
+  description            String?
+  createdAt              DateTime                  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt              DateTime                  @default(now()) @map("updated_at") @db.Timestamptz(6)
+  sources                CampaignSource[]
+  filters                CampaignFilter[]
+  scoringRuleSets        ScoringRuleSet[]
+  reviewChecklistTemplates ReviewChecklistTemplate[]
+  leads                  Lead[]
+
+  @@map("campaigns")
+}
+
+model CampaignSource {
+  id          BigInt   @id @default(autoincrement())
+  campaignId  BigInt   @map("campaign_id")
+  sourceType  String   @map("source_type") @db.VarChar(40)
+  sourceValue String   @map("source_value") @db.VarChar(255)
+  notes       String?
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  campaign    Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  @@map("campaign_sources")
+}
+
+model CampaignFilter {
+  id          BigInt   @id @default(autoincrement())
+  campaignId  BigInt   @map("campaign_id")
+  filterType  String   @map("filter_type") @db.VarChar(40)
+  operator    String   @db.VarChar(20)
+  filterValue String   @map("filter_value") @db.VarChar(255)
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  campaign    Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  @@map("campaign_filters")
+}
+
+model ScoringRuleSet {
+  id         BigInt        @id @default(autoincrement())
+  campaignId BigInt        @map("campaign_id")
+  name       String        @db.VarChar(120)
+  isActive   Boolean       @default(true) @map("is_active")
+  createdAt  DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt  DateTime      @default(now()) @map("updated_at") @db.Timestamptz(6)
+  campaign   Campaign      @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  rules      ScoringRule[]
+  leadScores LeadScore[]
+
+  @@map("scoring_rule_sets")
+}
+
+model ScoringRule {
+  id            BigInt         @id @default(autoincrement())
+  ruleSetId     BigInt         @map("rule_set_id")
+  ruleName      String         @map("rule_name") @db.VarChar(120)
+  scoreDelta    Int            @map("score_delta")
+  ruleType      String         @map("rule_type") @db.VarChar(40)
+  conditionJson Json           @map("condition_json")
+  sortOrder     Int            @default(0) @map("sort_order")
+  createdAt     DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  ruleSet       ScoringRuleSet @relation(fields: [ruleSetId], references: [id], onDelete: Cascade)
+
+  @@map("scoring_rules")
+}
+
+model ReviewChecklistTemplate {
+  id        BigInt                @id @default(autoincrement())
+  campaignId BigInt               @map("campaign_id")
+  name      String                @db.VarChar(120)
+  isActive  Boolean               @default(true) @map("is_active")
+  createdAt DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime              @default(now()) @map("updated_at") @db.Timestamptz(6)
+  campaign  Campaign              @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  items     ReviewChecklistItem[]
+
+  @@map("review_checklist_templates")
+}
+
+model ReviewChecklistItem {
+  id         BigInt                   @id @default(autoincrement())
+  templateId BigInt                   @map("template_id")
+  label      String                   @db.VarChar(255)
+  itemType   String                   @default("BOOLEAN") @map("item_type") @db.VarChar(30)
+  isRequired Boolean                  @default(true) @map("is_required")
+  sortOrder  Int                      @default(0) @map("sort_order")
+  createdAt  DateTime                 @default(now()) @map("created_at") @db.Timestamptz(6)
+  template   ReviewChecklistTemplate  @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  answers    ReviewChecklistAnswer[]
+
+  @@map("review_checklist_items")
+}
+
+model Lead {
+  id            BigInt                  @id @default(autoincrement())
+  campaignId    BigInt                  @map("campaign_id")
+  platform      String                  @db.VarChar(40)
+  handle        String                  @db.VarChar(120)
+  displayName   String?                 @map("display_name") @db.VarChar(255)
+  bio           String?
+  category      String?                 @db.VarChar(80)
+  followerCount Int?                    @map("follower_count")
+  postCount     Int?                    @map("post_count")
+  leadStatus    String                  @default("NEW") @map("lead_status") @db.VarChar(30)
+  crmStage      String?                 @map("crm_stage") @db.VarChar(40)
+  riskFlags     Json                    @default("[]") @map("risk_flags")
+  reviewNotes   String?                 @map("review_notes")
+  createdAt     DateTime                @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime                @default(now()) @map("updated_at") @db.Timestamptz(6)
+  campaign      Campaign                @relation(fields: [campaignId], references: [id], onDelete: Restrict)
+  contacts      Contact[]
+  posts         LeadPost[]
+  scores        LeadScore[]
+  checklistAnswers ReviewChecklistAnswer[]
+  outreachMessages OutreachMessage[]
+  replies       Reply[]
+  activities    Activity[]
+  onboarding    AmazonOnboarding?
+
+  @@unique([platform, handle])
+  @@index([platform])
+  @@index([leadStatus], map: "idx_leads_status")
+  @@index([crmStage], map: "idx_leads_crm_stage")
+  @@map("leads")
+}
+
+model Contact {
+  id           BigInt   @id @default(autoincrement())
+  leadId       BigInt   @map("lead_id")
+  contactType  String   @map("contact_type") @db.VarChar(30)
+  contactValue String   @map("contact_value") @db.VarChar(255)
+  isPrimary    Boolean  @default(false) @map("is_primary")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  lead         Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  @@map("contacts")
+}
+
+model LeadPost {
+  id             BigInt   @id @default(autoincrement())
+  leadId         BigInt   @map("lead_id")
+  platformPostId String?  @map("platform_post_id") @db.VarChar(120)
+  postUrl        String?  @map("post_url")
+  caption        String?
+  postedAt       DateTime? @map("posted_at") @db.Timestamptz(6)
+  metadata       Json     @default("{}")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  lead           Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  @@map("lead_posts")
+}
+
+model LeadScore {
+  id             BigInt         @id @default(autoincrement())
+  leadId         BigInt         @map("lead_id")
+  ruleSetId      BigInt         @map("rule_set_id")
+  totalScore     Int            @map("total_score")
+  scoreGrade     String?        @map("score_grade") @db.VarChar(20)
+  scoreBreakdown Json           @map("score_breakdown")
+  calculatedAt   DateTime       @default(now()) @map("calculated_at") @db.Timestamptz(6)
+  lead           Lead           @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  ruleSet        ScoringRuleSet @relation(fields: [ruleSetId], references: [id], onDelete: Restrict)
+
+  @@map("lead_scores")
+}
+
+model ReviewChecklistAnswer {
+  id              BigInt               @id @default(autoincrement())
+  leadId          BigInt               @map("lead_id")
+  checklistItemId BigInt               @map("checklist_item_id")
+  answerValue     String?              @map("answer_value") @db.VarChar(255)
+  note            String?
+  reviewedBy      String?              @map("reviewed_by") @db.VarChar(120)
+  reviewedAt      DateTime             @default(now()) @map("reviewed_at") @db.Timestamptz(6)
+  lead            Lead                 @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  checklistItem   ReviewChecklistItem  @relation(fields: [checklistItemId], references: [id], onDelete: Restrict)
+
+  @@map("review_checklist_answers")
+}
+
+model OutreachMessage {
+  id             BigInt    @id @default(autoincrement())
+  leadId         BigInt    @map("lead_id")
+  channel        String    @db.VarChar(20)
+  subject        String?   @db.VarChar(255)
+  body           String
+  deliveryStatus String    @default("DRAFT") @map("delivery_status") @db.VarChar(30)
+  approvedBy     String?   @map("approved_by") @db.VarChar(120)
+  approvedAt     DateTime? @map("approved_at") @db.Timestamptz(6)
+  sentAt         DateTime? @map("sent_at") @db.Timestamptz(6)
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  lead           Lead      @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  replies        Reply[]
+
+  @@index([deliveryStatus], map: "idx_outreach_messages_status")
+  @@map("outreach_messages")
+}
+
+model Reply {
+  id                BigInt           @id @default(autoincrement())
+  leadId            BigInt           @map("lead_id")
+  outreachMessageId BigInt?          @map("outreach_message_id")
+  channel           String           @db.VarChar(20)
+  replyType         String?          @map("reply_type") @db.VarChar(40)
+  messageBody       String?          @map("message_body")
+  receivedAt        DateTime         @map("received_at") @db.Timestamptz(6)
+  createdAt         DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  lead              Lead             @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  outreachMessage   OutreachMessage? @relation(fields: [outreachMessageId], references: [id], onDelete: SetNull)
+
+  @@index([leadId], map: "idx_replies_lead_id")
+  @@map("replies")
+}
+
+model Activity {
+  id           BigInt   @id @default(autoincrement())
+  leadId       BigInt   @map("lead_id")
+  activityType String   @map("activity_type") @db.VarChar(40)
+  summary      String   @db.VarChar(255)
+  detail       String?
+  actor        String?  @db.VarChar(120)
+  occurredAt   DateTime @default(now()) @map("occurred_at") @db.Timestamptz(6)
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  lead         Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  @@index([leadId], map: "idx_activities_lead_id")
+  @@map("activities")
+}
+
+model AmazonOnboarding {
+  id               BigInt   @id @default(autoincrement())
+  leadId           BigInt   @unique @map("lead_id")
+  onboardingStatus String   @map("onboarding_status") @db.VarChar(40)
+  nextAction       String?  @map("next_action") @db.VarChar(255)
+  notes            String?
+  startedAt        DateTime? @map("started_at") @db.Timestamptz(6)
+  updatedAt        DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+  lead             Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  @@map("amazon_onboarding")
+}
+
+model AuditLog {
+  id         BigInt   @id @default(autoincrement())
+  entityType String   @map("entity_type") @db.VarChar(60)
+  entityId   BigInt   @map("entity_id")
+  actionType String   @map("action_type") @db.VarChar(40)
+  actor      String?  @db.VarChar(120)
+  beforeData Json?    @map("before_data")
+  afterData  Json?    @map("after_data")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@map("audit_logs")
+}
