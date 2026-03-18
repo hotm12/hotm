@@ -1,7 +1,11 @@
 import { Module } from "@nestjs/common";
+import { LeadsModule } from "../leads/leads.module";
 import { CrmController } from "./crm.controller";
+import { CrmService } from "./crm.service";
 
 @Module({
-  controllers: [CrmController]
+  imports: [LeadsModule],
+  controllers: [CrmController],
+  providers: [CrmService]
 })
 export class CrmModule {}

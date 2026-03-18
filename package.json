@@ -7,8 +7,16 @@
     "packages/*"
   ],
   "scripts": {
-    "dev:web": "npm --workspace apps/web run dev",
-    "dev:api": "npm --workspace apps/api run start:dev",
-    "db:generate": "npm --workspace packages/db run generate"
+    "dev:web": ".\\scripts\\run-npm.cmd --workspace apps/web run dev",
+    "dev:api": ".\\scripts\\run-npm.cmd --workspace apps/api run start:dev",
+    "db:generate": ".\\scripts\\run-npm.cmd --workspace packages/db run generate",
+    "db:push": ".\\scripts\\run-npm.cmd --workspace packages/db run push",
+    "db:start:embedded": ".\\scripts\\run-with-npm-node.cmd .\\scripts\\embedded-postgres-server.mjs",
+    "db:push:embedded": ".\\scripts\\with-embedded-db-env.cmd .\\scripts\\run-npm.cmd --workspace packages/db run push",
+    "dev:api:embedded": ".\\scripts\\with-embedded-db-env.cmd .\\scripts\\run-npm.cmd --workspace apps/api run start:dev"
+  },
+  "devDependencies": {
+    "@embedded-postgres/windows-x64": "^18.3.0-beta.16",
+    "embedded-postgres": "^18.3.0-beta.16"
   }
 }

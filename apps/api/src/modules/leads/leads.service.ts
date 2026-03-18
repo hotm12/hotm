@@ -1,161 +1,151 @@
 import { Injectable, NotFoundException } from "@nestjs/common";
+import { Prisma } from "@prisma/client";
+import { resolve } from "node:path";
+import {
+  createDefaultLeadSeeds,
+  defaultChecklistLabels,
+  ensurePrimaryCampaignSeed
+} from "../../common/dev-seed";
+import { readJsonFile, writeJsonFile } from "../../common/json-file-store";
+import { PrismaService } from "../../prisma/prisma.service";
 import {
   CreateLeadDto,
   LeadDetailDto,
   LeadListQueryDto,
   LeadScoreDto,
-  LeadSummaryDto
+  LeadSummaryDto,
+  ReviewChecklistAnswerDto
 } from "./leads.types";
 
 type LeadRecord = Omit<LeadDetailDto, "score" | "totalScore" | "scoreGrade">;
+type LeadState = {
+  nextLeadId: number;
+  nextContactId: number;
+  nextReviewAnswerId: number;
+  leads: LeadRecord[];
+};
+
+const leadDetailArgs = Prisma.validator<Prisma.LeadDefaultArgs>()({
+  include: {
+    campaign: {
+      include: {
+        reviewChecklistTemplates: {
+          orderBy: {
+            updatedAt: "desc"
+          },
+          include: {
+            items: {
+              orderBy: {
+                sortOrder: "asc"
+              }
+            }
+          }
+        }
+      }
+    },
+    contacts: {
+      orderBy: {
+        id: "asc"
+      }
+    },
+    posts: {
+      orderBy: {
+        id: "asc"
+      }
+    },
+    checklistAnswers: {
+      orderBy: {
+        id: "asc"
+      },
+      include: {
+        checklistItem: true
+      }
+    }
+  }
+});
+
+type LeadDbRecord = Prisma.LeadGetPayload<typeof leadDetailArgs>;
 
 @Injectable()
 export class LeadsService {
+  private readonly stateFilePath = resolve(process.cwd(), ".data", "leads.json");
+  private readonly databaseEnabled = Boolean(process.env.DATABASE_URL?.trim());
   private nextLeadId = 4;
   private nextContactId = 5;
-  private nextPostId = 5;
+  private nextReviewAnswerId = 8;
+  private readonly leads: LeadRecord[] = createDefaultLeadSeeds();
+  private seedPromise: Promise<void> | null = null;
 
-  private readonly leads: LeadRecord[] = [
-    {
-      id: 1,
-      campaignId: 1,
-      platform: "INSTAGRAM",
-      handle: "@kbeauty_store_lab",
-      displayName: "KBeauty Store Lab",
-      category: "K-Beauty",
-      followerCount: 12200,
-      postCount: 168,
-      leadStatus: "REVIEW_READY",
-      crmStage: "CONTACTED",
-      riskFlags: ["민감 성분 검토 필요"],
-      bio: "K-beauty 셀렉트샵과 신제품 리뷰를 함께 운영하는 스토어",
-      reviewNotes: "프로필 링크와 공개 이메일이 있어 검수 우선순위가 높다.",
-      contacts: [
-        {
-          id: 1,
-          contactType: "EMAIL",
-          contactValue: "hello@kbeautylab.example",
-          isPrimary: true
-        },
-        {
-          id: 2,
-          contactType: "INSTAGRAM_DM",
-          contactValue: "@kbeauty_store_lab",
-          isPrimary: false
-        }
-      ],
-      posts: [
-        {
-          id: 1,
-          postUrl: "https://instagram.com/p/sample1",
-          caption: "신제품 런칭 소개 포스트",
-          postedAt: "2026-03-15T10:00:00Z"
-        },
-        {
-          id: 2,
-          postUrl: "https://instagram.com/p/sample2",
-          caption: "베스트셀러 상품 큐레이션",
-          postedAt: "2026-03-12T10:00:00Z"
-        }
-      ]
-    },
-    {
-      id: 2,
-      campaignId: 1,
-      platform: "INSTAGRAM",
-      handle: "@seoul_skin_archive",
-      displayName: "Seoul Skin Archive",
-      category: "K-Beauty",
-      followerCount: 4100,
-      postCount: 74,
-      leadStatus: "NEW",
-      crmStage: "CONTACTED",
-      riskFlags: [],
-      bio: "K-뷰티 성분 큐레이션과 리뷰 콘텐츠 운영",
-      reviewNotes: "콘텐츠 품질은 좋지만 판매 채널 명확성은 추가 확인 필요",
-      contacts: [
-        {
-          id: 3,
-          contactType: "INSTAGRAM_DM",
-          contactValue: "@seoul_skin_archive",
-          isPrimary: true
-        }
-      ],
-      posts: [
-        {
-          id: 3,
-          postUrl: "https://instagram.com/p/sample3",
-          caption: "성분 비교 요약 카드뉴스",
-          postedAt: "2026-03-16T08:30:00Z"
-        }
-      ]
-    },
-    {
-      id: 3,
-      campaignId: 1,
-      platform: "TIKTOK",
-      handle: "@kglow_finds",
-      displayName: "KGlow Finds",
-      category: "Beauty Accessories",
-      followerCount: 28000,
-      postCount: 220,
-      leadStatus: "APPROVED",
-      crmStage: "REPLIED",
-      riskFlags: ["DM보다 이메일 우선 권장"],
-      bio: "뷰티 소도구와 액세서리 하울 중심의 숏폼 채널",
-      reviewNotes: "브랜드 톤이 명확해서 개인화 메시지 작성이 쉬움",
-      contacts: [
-        {
-          id: 4,
-          contactType: "EMAIL",
-          contactValue: "partnerships@kglowfinds.example",
-          isPrimary: true
-        }
-      ],
-      posts: [
-        {
-          id: 4,
-          postUrl: "https://tiktok.com/@kglow_finds/video/sample4",
-          caption: "뷰티 툴 추천 숏폼",
-          postedAt: "2026-03-14T12:00:00Z"
-        }
-      ]
+  constructor(private readonly prisma: PrismaService) {
+    if (!this.databaseEnabled) {
+      this.loadState();
     }
-  ];
+  }
 
-  findAll(query: LeadListQueryDto): LeadSummaryDto[] {
+  async findAll(query: LeadListQueryDto): Promise<LeadSummaryDto[]> {
+    if (this.databaseEnabled) {
+      await this.ensureDatabaseSeed();
+      const leads = await this.prisma.lead.findMany({
+        ...leadDetailArgs,
+        where: this.buildDatabaseWhere(query),
+        orderBy: {
+          id: "desc"
+        }
+      });
+
+      return leads.map((lead) => this.toSummaryFromDb(lead));
+    }
+
     return this.leads
-      .filter((lead) => {
-        if (query.campaignId && lead.campaignId !== Number(query.campaignId)) {
-          return false;
-        }
-
-        if (query.platform && lead.platform !== query.platform) {
-          return false;
-        }
-
-        if (query.leadStatus && lead.leadStatus !== query.leadStatus) {
-          return false;
-        }
-
-        if (query.keyword) {
-          const keyword = query.keyword.toLowerCase();
-          const haystack = `${lead.handle} ${lead.displayName} ${lead.category ?? ""}`.toLowerCase();
-          return haystack.includes(keyword);
-        }
-
-        return true;
-      })
-      .map((lead) => this.toSummary(lead));
+      .filter((lead) => this.matchesQuery(lead, query))
+      .map((lead) => this.toSummaryFromState(lead));
   }
 
-  findOne(id: number): LeadDetailDto {
-    const lead = this.requireLead(id);
-    return this.toDetail(lead);
+  async findOne(id: number): Promise<LeadDetailDto> {
+    if (this.databaseEnabled) {
+      return this.toDetailFromDb(await this.requireLeadRecord(id));
+    }
+
+    return this.toDetailFromState(this.requireLeadFromState(id));
   }
 
-  create(payload: CreateLeadDto): LeadDetailDto {
+  async create(payload: CreateLeadDto): Promise<LeadDetailDto> {
     const contactValue = payload.contactValue?.trim();
+
+    if (this.databaseEnabled) {
+      await this.ensureDatabaseSeed();
+      await this.requireCampaign(payload.campaignId);
+
+      const lead = await this.prisma.lead.create({
+        ...leadDetailArgs,
+        data: {
+          campaignId: BigInt(payload.campaignId),
+          platform: payload.platform,
+          handle: payload.handle,
+          displayName: payload.displayName,
+          category: payload.category,
+          followerCount: payload.followerCount,
+          postCount: payload.postCount,
+          leadStatus: "NEW",
+          crmStage: "CONTACTED",
+          riskFlags: [],
+          bio: payload.bio,
+          reviewNotes: "New lead created",
+          contacts: contactValue
+            ? {
+                create: {
+                  contactType: "EMAIL",
+                  contactValue,
+                  isPrimary: true
+                }
+              }
+            : undefined
+        }
+      });
+
+      return this.toDetailFromDb(lead);
+    }
+
     const record: LeadRecord = {
       id: this.nextLeadId++,
       campaignId: payload.campaignId,
@@ -169,7 +159,21 @@ export class LeadsService {
       crmStage: "CONTACTED",
       riskFlags: [],
       bio: payload.bio,
-      reviewNotes: "신규 등록 리드",
+      reviewNotes: "New lead created",
+      reviewChecklistAnswers: [
+        {
+          id: this.nextReviewAnswerId++,
+          label: defaultChecklistLabels[0],
+          passed: null,
+          note: ""
+        },
+        {
+          id: this.nextReviewAnswerId++,
+          label: defaultChecklistLabels[1],
+          passed: Boolean(contactValue),
+          note: contactValue ? "Contact value was provided at registration." : ""
+        }
+      ],
       contacts: contactValue
         ? [
             {
@@ -184,15 +188,300 @@ export class LeadsService {
     };
 
     this.leads.unshift(record);
-    return this.toDetail(record);
+    this.saveState();
+    return this.toDetailFromState(record);
   }
 
-  recalculateScore(id: number): LeadScoreDto {
-    const lead = this.requireLead(id);
-    return this.buildScore(lead);
+  async recalculateScore(id: number): Promise<LeadScoreDto> {
+    if (this.databaseEnabled) {
+      const lead = await this.requireLeadRecord(id);
+      return this.buildScore({
+        followerCount: lead.followerCount,
+        postCount: lead.postCount,
+        contacts: lead.contacts,
+        riskFlags: this.toRiskFlags(lead.riskFlags)
+      });
+    }
+
+    return this.buildScore(this.requireLeadFromState(id));
   }
 
-  private requireLead(id: number): LeadRecord {
+  async listReviewQueue(): Promise<LeadDetailDto[]> {
+    if (this.databaseEnabled) {
+      await this.ensureDatabaseSeed();
+      const leads = await this.prisma.lead.findMany({
+        ...leadDetailArgs,
+        where: {
+          leadStatus: {
+            in: ["NEW", "REVIEW_READY", "ON_HOLD"]
+          }
+        },
+        orderBy: {
+          id: "desc"
+        }
+      });
+
+      return leads.map((lead) => this.toDetailFromDb(lead));
+    }
+
+    return this.leads
+      .filter((lead) => ["NEW", "REVIEW_READY", "ON_HOLD"].includes(lead.leadStatus))
+      .map((lead) => this.toDetailFromState(lead));
+  }
+
+  async listOutreachCandidates(): Promise<LeadDetailDto[]> {
+    if (this.databaseEnabled) {
+      await this.ensureDatabaseSeed();
+      const leads = await this.prisma.lead.findMany({
+        ...leadDetailArgs,
+        where: {
+          leadStatus: "APPROVED"
+        },
+        orderBy: {
+          id: "desc"
+        }
+      });
+
+      return leads.map((lead) => this.toDetailFromDb(lead));
+    }
+
+    return this.leads
+      .filter((lead) => lead.leadStatus === "APPROVED")
+      .map((lead) => this.toDetailFromState(lead));
+  }
+
+  async listCrmLeads(): Promise<LeadDetailDto[]> {
+    if (this.databaseEnabled) {
+      await this.ensureDatabaseSeed();
+      const leads = await this.prisma.lead.findMany({
+        ...leadDetailArgs,
+        where: {
+          crmStage: {
+            not: null
+          }
+        },
+        orderBy: {
+          id: "desc"
+        }
+      });
+
+      return leads.map((lead) => this.toDetailFromDb(lead));
+    }
+
+    return this.leads
+      .filter((lead) => Boolean(lead.crmStage))
+      .map((lead) => this.toDetailFromState(lead));
+  }
+
+  async moveCrmStage(id: number, nextStage: string): Promise<LeadDetailDto> {
+    if (this.databaseEnabled) {
+      const lead = await this.prisma.lead.update({
+        ...leadDetailArgs,
+        where: {
+          id: BigInt(id)
+        },
+        data: {
+          crmStage: nextStage
+        }
+      });
+
+      return this.toDetailFromDb(lead);
+    }
+
+    const lead = this.requireLeadFromState(id);
+    lead.crmStage = nextStage;
+    this.saveState();
+    return this.toDetailFromState(lead);
+  }
+
+  async submitReview(
+    id: number,
+    payload: {
+      decisionStatus: string;
+      reviewNotes?: string;
+      checklistAnswers: Array<{
+        label: string;
+        passed: boolean | null;
+        note?: string;
+      }>;
+    }
+  ): Promise<LeadDetailDto> {
+    if (this.databaseEnabled) {
+      await this.ensureDatabaseSeed();
+      const lead = await this.requireLeadRecord(id);
+
+      await this.prisma.$transaction(async (tx) => {
+        let template = await tx.reviewChecklistTemplate.findFirst({
+          where: {
+            campaignId: lead.campaignId
+          },
+          orderBy: {
+            updatedAt: "desc"
+          },
+          include: {
+            items: {
+              orderBy: {
+                sortOrder: "asc"
+              }
+            }
+          }
+        });
+
+        if (!template) {
+          template = await tx.reviewChecklistTemplate.create({
+            data: {
+              campaignId: lead.campaignId,
+              name: "Lead Review Checklist",
+              isActive: true
+            },
+            include: {
+              items: {
+                orderBy: {
+                  sortOrder: "asc"
+                }
+              }
+            }
+          });
+        }
+
+        const itemByLabel = new Map(template.items.map((item) => [item.label, item]));
+        let nextSortOrder = template.items.length;
+        const resolvedItems: Array<{
+          itemId: bigint;
+          answer: (typeof payload.checklistAnswers)[number];
+        }> = [];
+
+        for (const answer of payload.checklistAnswers) {
+          let item = itemByLabel.get(answer.label);
+
+          if (!item) {
+            item = await tx.reviewChecklistItem.create({
+              data: {
+                templateId: template.id,
+                label: answer.label,
+                itemType: answer.passed === null ? "TEXT" : "BOOLEAN",
+                isRequired: false,
+                sortOrder: nextSortOrder++
+              }
+            });
+            itemByLabel.set(answer.label, item);
+          }
+
+          resolvedItems.push({
+            itemId: item.id,
+            answer
+          });
+        }
+
+        await tx.reviewChecklistAnswer.deleteMany({
+          where: {
+            leadId: BigInt(id)
+          }
+        });
+
+        await tx.lead.update({
+          where: {
+            id: BigInt(id)
+          },
+          data: {
+            leadStatus: payload.decisionStatus,
+            reviewNotes: payload.reviewNotes,
+            checklistAnswers: {
+              create: resolvedItems.map(({ itemId, answer }) => ({
+                checklistItem: {
+                  connect: {
+                    id: itemId
+                  }
+                },
+                answerValue: this.toAnswerValue(answer.passed),
+                note: answer.note
+              }))
+            }
+          }
+        });
+      });
+
+      return this.findOne(id);
+    }
+
+    const lead = this.requireLeadFromState(id);
+    lead.leadStatus = payload.decisionStatus;
+    lead.reviewNotes = payload.reviewNotes ?? lead.reviewNotes;
+    lead.reviewChecklistAnswers = payload.checklistAnswers.map((answer) => ({
+      id: this.nextReviewAnswerId++,
+      label: answer.label,
+      passed: answer.passed,
+      note: answer.note
+    }));
+
+    this.saveState();
+    return this.toDetailFromState(lead);
+  }
+
+  private matchesQuery(lead: LeadRecord, query: LeadListQueryDto) {
+    if (query.campaignId && lead.campaignId !== Number(query.campaignId)) {
+      return false;
+    }
+
+    if (query.platform && lead.platform !== query.platform) {
+      return false;
+    }
+
+    if (query.leadStatus && lead.leadStatus !== query.leadStatus) {
+      return false;
+    }
+
+    if (query.keyword) {
+      const keyword = query.keyword.toLowerCase();
+      const haystack = `${lead.handle} ${lead.displayName} ${lead.category ?? ""}`.toLowerCase();
+      return haystack.includes(keyword);
+    }
+
+    return true;
+  }
+
+  private buildDatabaseWhere(query: LeadListQueryDto): Prisma.LeadWhereInput {
+    const where: Prisma.LeadWhereInput = {};
+
+    if (query.campaignId) {
+      where.campaignId = BigInt(Number(query.campaignId));
+    }
+
+    if (query.platform) {
+      where.platform = query.platform;
+    }
+
+    if (query.leadStatus) {
+      where.leadStatus = query.leadStatus;
+    }
+
+    if (query.keyword) {
+      where.OR = [
+        {
+          handle: {
+            contains: query.keyword,
+            mode: "insensitive"
+          }
+        },
+        {
+          displayName: {
+            contains: query.keyword,
+            mode: "insensitive"
+          }
+        },
+        {
+          category: {
+            contains: query.keyword,
+            mode: "insensitive"
+          }
+        }
+      ];
+    }
+
+    return where;
+  }
+
+  private requireLeadFromState(id: number): LeadRecord {
     const lead = this.leads.find((item) => item.id === id);
 
     if (!lead) {
@@ -202,7 +491,23 @@ export class LeadsService {
     return lead;
   }
 
-  private toSummary(lead: LeadRecord): LeadSummaryDto {
+  private async requireLeadRecord(id: number): Promise<LeadDbRecord> {
+    await this.ensureDatabaseSeed();
+    const lead = await this.prisma.lead.findUnique({
+      ...leadDetailArgs,
+      where: {
+        id: BigInt(id)
+      }
+    });
+
+    if (!lead) {
+      throw new NotFoundException(`Lead ${id} not found`);
+    }
+
+    return lead;
+  }
+
+  private toSummaryFromState(lead: LeadRecord): LeadSummaryDto {
     const score = this.buildScore(lead);
 
     return {
@@ -221,61 +526,158 @@ export class LeadsService {
     };
   }
 
-  private toDetail(lead: LeadRecord): LeadDetailDto {
+  private toDetailFromState(lead: LeadRecord): LeadDetailDto {
     return {
-      ...this.toSummary(lead),
+      ...this.toSummaryFromState(lead),
       bio: lead.bio,
       postCount: lead.postCount,
       reviewNotes: lead.reviewNotes,
       contacts: lead.contacts,
       posts: lead.posts,
-      score: this.buildScore(lead)
+      score: this.buildScore(lead),
+      reviewChecklistAnswers: lead.reviewChecklistAnswers
     };
   }
 
-  private buildScore(lead: LeadRecord): LeadScoreDto {
+  private toSummaryFromDb(lead: LeadDbRecord): LeadSummaryDto {
+    const score = this.buildScore({
+      followerCount: lead.followerCount,
+      postCount: lead.postCount,
+      contacts: lead.contacts,
+      riskFlags: this.toRiskFlags(lead.riskFlags)
+    });
+
+    return {
+      id: this.toNumber(lead.id),
+      campaignId: this.toNumber(lead.campaignId),
+      platform: lead.platform,
+      handle: lead.handle,
+      displayName: lead.displayName ?? lead.handle,
+      category: lead.category ?? undefined,
+      followerCount: lead.followerCount ?? undefined,
+      leadStatus: lead.leadStatus,
+      crmStage: lead.crmStage ?? undefined,
+      totalScore: score.totalScore,
+      scoreGrade: score.scoreGrade,
+      riskFlags: this.toRiskFlags(lead.riskFlags)
+    };
+  }
+
+  private toDetailFromDb(lead: LeadDbRecord): LeadDetailDto {
+    return {
+      ...this.toSummaryFromDb(lead),
+      bio: lead.bio ?? undefined,
+      postCount: lead.postCount ?? undefined,
+      reviewNotes: lead.reviewNotes ?? undefined,
+      contacts: lead.contacts.map((contact) => ({
+        id: this.toNumber(contact.id),
+        contactType: contact.contactType,
+        contactValue: contact.contactValue,
+        isPrimary: contact.isPrimary
+      })),
+      posts: lead.posts.map((post) => ({
+        id: this.toNumber(post.id),
+        postUrl: post.postUrl ?? "",
+        caption: post.caption ?? "",
+        postedAt: post.postedAt?.toISOString() ?? ""
+      })),
+      score: this.buildScore({
+        followerCount: lead.followerCount,
+        postCount: lead.postCount,
+        contacts: lead.contacts,
+        riskFlags: this.toRiskFlags(lead.riskFlags)
+      }),
+      reviewChecklistAnswers: this.mergeChecklistAnswers(lead)
+    };
+  }
+
+  private mergeChecklistAnswers(lead: LeadDbRecord): ReviewChecklistAnswerDto[] {
+    const templateItems =
+      lead.campaign.reviewChecklistTemplates[0]?.items ?? [];
+    const answersByItemId = new Map(
+      lead.checklistAnswers.map((answer) => [
+        answer.checklistItemId.toString(),
+        answer
+      ])
+    );
+
+    const merged = templateItems.map((item) => {
+      const answer = answersByItemId.get(item.id.toString());
+
+      return {
+        id: answer ? this.toNumber(answer.id) : this.toNumber(item.id),
+        label: item.label,
+        passed: answer ? this.fromAnswerValue(answer.answerValue) : null,
+        note: answer?.note ?? ""
+      };
+    });
+
+    const templateItemIds = new Set(templateItems.map((item) => item.id.toString()));
+
+    for (const answer of lead.checklistAnswers) {
+      if (templateItemIds.has(answer.checklistItemId.toString())) {
+        continue;
+      }
+
+      merged.push({
+        id: this.toNumber(answer.id),
+        label: answer.checklistItem.label,
+        passed: this.fromAnswerValue(answer.answerValue),
+        note: answer.note ?? ""
+      });
+    }
+
+    return merged;
+  }
+
+  private buildScore(lead: {
+    followerCount?: number | null;
+    postCount?: number | null;
+    contacts: Array<{ contactType: string }>;
+    riskFlags: string[];
+  }): LeadScoreDto {
     const scoreBreakdown: LeadScoreDto["scoreBreakdown"] = [];
     let totalScore = 0;
 
     if ((lead.followerCount ?? 0) >= 10000) {
       scoreBreakdown.push({
-        label: "팔로워 규모",
+        label: "Audience size",
         scoreDelta: 25,
-        reason: "팔로워 수가 1만 명 이상이다"
+        reason: "Follower count is at least 10,000."
       });
       totalScore += 25;
     } else if ((lead.followerCount ?? 0) >= 3000) {
       scoreBreakdown.push({
-        label: "팔로워 규모",
+        label: "Audience size",
         scoreDelta: 15,
-        reason: "팔로워 수가 3천 명 이상이다"
+        reason: "Follower count is at least 3,000."
       });
       totalScore += 15;
     }
 
     if (lead.contacts.some((item) => item.contactType === "EMAIL")) {
       scoreBreakdown.push({
-        label: "공개 이메일",
+        label: "Public contact",
         scoreDelta: 15,
-        reason: "공개 이메일 채널이 존재한다"
+        reason: "A reachable email contact is available."
       });
       totalScore += 15;
     }
 
     if ((lead.postCount ?? 0) >= 100) {
       scoreBreakdown.push({
-        label: "콘텐츠 활동량",
+        label: "Content activity",
         scoreDelta: 10,
-        reason: "게시물 수가 충분하다"
+        reason: "Posting history is active enough for outreach."
       });
       totalScore += 10;
     }
 
     if (lead.riskFlags.length > 0) {
       scoreBreakdown.push({
-        label: "위험 신호",
+        label: "Risk signal",
         scoreDelta: -10,
-        reason: "검토가 필요한 위험 신호가 존재한다"
+        reason: "Manual review is still needed for at least one risk flag."
       });
       totalScore -= 10;
     }
@@ -288,5 +690,152 @@ export class LeadsService {
       scoreGrade,
       scoreBreakdown
     };
+  }
+
+  private async ensureDatabaseSeed() {
+    if (!this.databaseEnabled) {
+      return;
+    }
+
+    if (!this.seedPromise) {
+      this.seedPromise = (async () => {
+        const leadCount = await this.prisma.lead.count();
+
+        if (leadCount > 0) {
+          return;
+        }
+
+        const campaign = await ensurePrimaryCampaignSeed(this.prisma);
+        const template = campaign.reviewChecklistTemplates[0];
+
+        const itemByLabel = new Map(template.items.map((item) => [item.label, item]));
+
+        for (const lead of createDefaultLeadSeeds()) {
+          await this.prisma.lead.create({
+            data: {
+              campaignId: campaign.id,
+              platform: lead.platform,
+              handle: lead.handle,
+              displayName: lead.displayName,
+              category: lead.category,
+              followerCount: lead.followerCount,
+              postCount: lead.postCount,
+              leadStatus: lead.leadStatus,
+              crmStage: lead.crmStage,
+              riskFlags: lead.riskFlags,
+              bio: lead.bio,
+              reviewNotes: lead.reviewNotes,
+              contacts: {
+                create: lead.contacts.map((contact) => ({
+                  contactType: contact.contactType,
+                  contactValue: contact.contactValue,
+                  isPrimary: contact.isPrimary
+                }))
+              },
+              posts: {
+                create: lead.posts.map((post) => ({
+                  postUrl: post.postUrl,
+                  caption: post.caption,
+                  postedAt: post.postedAt ? new Date(post.postedAt) : undefined
+                }))
+              },
+              checklistAnswers: {
+                create: lead.reviewChecklistAnswers
+                  .map((answer) => {
+                    const item = itemByLabel.get(answer.label);
+
+                    if (!item) {
+                      return null;
+                    }
+
+                    return {
+                      checklistItem: {
+                        connect: {
+                          id: item.id
+                        }
+                      },
+                      answerValue: this.toAnswerValue(answer.passed),
+                      note: answer.note
+                    };
+                  })
+                  .filter((answer): answer is NonNullable<typeof answer> => Boolean(answer))
+              }
+            }
+          });
+        }
+      })();
+    }
+
+    await this.seedPromise;
+  }
+
+  private async requireCampaign(id: number) {
+    const campaign = await this.prisma.campaign.findUnique({
+      where: {
+        id: BigInt(id)
+      }
+    });
+
+    if (!campaign) {
+      throw new NotFoundException(`Campaign ${id} not found`);
+    }
+  }
+
+  private toRiskFlags(value: Prisma.JsonValue): string[] {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+
+    return value.filter((item): item is string => typeof item === "string");
+  }
+
+  private toAnswerValue(value: boolean | null) {
+    if (value === true) {
+      return "PASS";
+    }
+
+    if (value === false) {
+      return "FAIL";
+    }
+
+    return "PENDING";
+  }
+
+  private fromAnswerValue(value: string | null | undefined) {
+    if (value === "PASS") {
+      return true;
+    }
+
+    if (value === "FAIL") {
+      return false;
+    }
+
+    return null;
+  }
+
+  private toNumber(value: bigint): number {
+    return Number(value);
+  }
+
+  private loadState() {
+    const state = readJsonFile<LeadState | null>(this.stateFilePath, null);
+
+    if (!state) {
+      return;
+    }
+
+    this.nextLeadId = state.nextLeadId;
+    this.nextContactId = state.nextContactId;
+    this.nextReviewAnswerId = state.nextReviewAnswerId;
+    this.leads.splice(0, this.leads.length, ...state.leads);
+  }
+
+  private saveState() {
+    writeJsonFile<LeadState>(this.stateFilePath, {
+      nextLeadId: this.nextLeadId,
+      nextContactId: this.nextContactId,
+      nextReviewAnswerId: this.nextReviewAnswerId,
+      leads: this.leads
+    });
   }
 }

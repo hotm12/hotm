@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { FormEvent, useEffect, useState } from "react";
 
 type LeadSummary = {
@@ -42,6 +42,13 @@ type LeadScore = {
   }>;
 };
 
+type ReviewChecklistAnswer = {
+  id: number;
+  label: string;
+  passed: boolean | null;
+  note?: string;
+};
+
 type LeadDetail = LeadSummary & {
   bio?: string;
   postCount?: number;
@@ -49,6 +56,7 @@ type LeadDetail = LeadSummary & {
   contacts: LeadContact[];
   posts: LeadPost[];
   score: LeadScore;
+  reviewChecklistAnswers: ReviewChecklistAnswer[];
 };
 
 type LeadFilters = {
@@ -85,9 +93,9 @@ const seedDetails: LeadDetail[] = [
     crmStage: "CONTACTED",
     totalScore: 40,
     scoreGrade: "A",
-    riskFlags: ["민감 성분 검토 필요"],
-    bio: "K-beauty 셀렉트샵과 신제품 리뷰를 함께 운영하는 스토어",
-    reviewNotes: "프로필 링크와 공개 이메일이 있어 검수 우선순위가 높다.",
+    riskFlags: ["민감 카테고리 재검토 필요"],
+    bio: "K-뷰티 제품 소개와 리뷰를 중심으로 운영하는 판매 계정입니다.",
+    reviewNotes: "프로필 링크와 공개 이메일이 있어 검수 우선순위가 높습니다.",
     contacts: [
       {
         id: 1,
@@ -106,9 +114,13 @@ const seedDetails: LeadDetail[] = [
       {
         id: 1,
         postUrl: "https://instagram.com/p/sample1",
-        caption: "신제품 런칭 소개 포스트",
+        caption: "신제품 묶음 소개 포스트",
         postedAt: "2026-03-15T10:00:00Z"
       }
+    ],
+    reviewChecklistAnswers: [
+      { id: 1, label: "실제 판매 계정 여부", passed: true, note: "상품 링크와 판매 문구 확인" },
+      { id: 2, label: "공개 연락 채널 존재 여부", passed: true, note: "이메일 공개 확인" }
     ],
     score: {
       totalScore: 40,
@@ -117,12 +129,12 @@ const seedDetails: LeadDetail[] = [
         {
           label: "팔로워 규모",
           scoreDelta: 25,
-          reason: "팔로워 수가 1만 명 이상이다"
+          reason: "팔로워가 1만 명 이상입니다."
         },
         {
           label: "공개 이메일",
           scoreDelta: 15,
-          reason: "공개 이메일 채널이 존재한다"
+          reason: "공개 이메일 연락처가 존재합니다."
         }
       ]
     }
@@ -141,8 +153,8 @@ const seedDetails: LeadDetail[] = [
     totalScore: 15,
     scoreGrade: "C",
     riskFlags: [],
-    bio: "K-뷰티 성분 큐레이션과 리뷰 콘텐츠 운영",
-    reviewNotes: "콘텐츠 품질은 좋지만 판매 채널 명확성은 추가 확인 필요",
+    bio: "K-뷰티 성분 큐레이션과 리뷰 콘텐츠를 운영합니다.",
+    reviewNotes: "콘텐츠 반응은 좋지만 판매 채널 명확성은 추가 확인이 필요합니다.",
     contacts: [
       {
         id: 3,
@@ -152,6 +164,10 @@ const seedDetails: LeadDetail[] = [
       }
     ],
     posts: [],
+    reviewChecklistAnswers: [
+      { id: 3, label: "실제 판매 계정 여부", passed: null, note: "" },
+      { id: 4, label: "공개 연락 채널 존재 여부", passed: false, note: "이메일 미확인" }
+    ],
     score: {
       totalScore: 15,
       scoreGrade: "C",
@@ -159,21 +175,21 @@ const seedDetails: LeadDetail[] = [
         {
           label: "팔로워 규모",
           scoreDelta: 15,
-          reason: "팔로워 수가 3천 명 이상이다"
+          reason: "팔로워가 3천 명 이상입니다."
         }
       ]
     }
   }
 ];
 
-const formSectionStyle = {
+const formSectionStyle: CSSProperties = {
   background: "#111827",
   border: "1px solid #1f2937",
   borderRadius: 16,
   padding: 20
 };
 
-const inputStyle = {
+const inputStyle: CSSProperties = {
   width: "100%",
   padding: "10px 12px",
   borderRadius: 10,
@@ -222,9 +238,7 @@ export function LeadsClient() {
   const [leads, setLeads] = useState<LeadSummary[]>([]);
   const [selectedLeadId, setSelectedLeadId] = useState<number | null>(null);
   const [selectedLead, setSelectedLead] = useState<LeadDetail | null>(null);
-  const [createLeadForm, setCreateLeadForm] = useState<CreateLeadForm>(
-    createEmptyLeadForm()
-  );
+  const [createLeadForm, setCreateLeadForm] = useState<CreateLeadForm>(createEmptyLeadForm());
   const [statusMessage, setStatusMessage] = useState("리드 데이터를 불러오는 중입니다.");
   const [isLoading, setIsLoading] = useState(true);
 
@@ -237,12 +251,15 @@ export function LeadsClient() {
 
     try {
       const query = new URLSearchParams();
+
       if (nextFilters.platform) {
         query.set("platform", nextFilters.platform);
       }
+
       if (nextFilters.leadStatus) {
         query.set("leadStatus", nextFilters.leadStatus);
       }
+
       if (nextFilters.keyword) {
         query.set("keyword", nextFilters.keyword);
       }
@@ -253,18 +270,20 @@ export function LeadsClient() {
       setLeads(list);
       const nextLeadId = list[0]?.id ?? null;
       setSelectedLeadId(nextLeadId);
+
       if (nextLeadId) {
         await loadLead(nextLeadId);
       } else {
         setSelectedLead(null);
       }
+
       setStatusMessage("API에서 리드 목록을 불러왔습니다.");
     } catch {
       const fallbackList = seedDetails.map(toSummary);
       setLeads(fallbackList);
       setSelectedLeadId(fallbackList[0]?.id ?? null);
       setSelectedLead(seedDetails[0] ?? null);
-      setStatusMessage("API가 아직 실행 중이 아니라 샘플 리드로 표시 중입니다.");
+      setStatusMessage("API 연결 전이라 샘플 리드를 표시 중입니다.");
     } finally {
       setIsLoading(false);
     }
@@ -299,22 +318,19 @@ export function LeadsClient() {
           followerCount: createLeadForm.followerCount
             ? Number(createLeadForm.followerCount)
             : undefined,
-          postCount: createLeadForm.postCount
-            ? Number(createLeadForm.postCount)
-            : undefined,
+          postCount: createLeadForm.postCount ? Number(createLeadForm.postCount) : undefined,
           bio: createLeadForm.bio || undefined,
           contactValue: createLeadForm.contactValue || undefined
         })
       });
 
-      const summary = toSummary(created);
-      setLeads((prev) => [summary, ...prev]);
+      setLeads((prev) => [toSummary(created), ...prev]);
       setSelectedLeadId(created.id);
       setSelectedLead(created);
       setCreateLeadForm(createEmptyLeadForm());
       setStatusMessage("새 리드를 등록했습니다.");
     } catch {
-      setStatusMessage("API가 준비되면 새 리드 등록이 가능합니다.");
+      setStatusMessage("API가 준비되면 리드 등록이 가능합니다.");
     }
   }
 
@@ -324,12 +340,10 @@ export function LeadsClient() {
     }
 
     try {
-      const score = await request<LeadScore>(
-        `/leads/${selectedLeadId}/recalculate-score`,
-        {
-          method: "POST"
-        }
-      );
+      const score = await request<LeadScore>(`/leads/${selectedLeadId}/recalculate-score`, {
+        method: "POST"
+      });
+
       setSelectedLead((prev) =>
         prev
           ? {
@@ -340,6 +354,7 @@ export function LeadsClient() {
             }
           : prev
       );
+
       setLeads((prev) =>
         prev.map((item) =>
           item.id === selectedLeadId
@@ -351,7 +366,8 @@ export function LeadsClient() {
             : item
         )
       );
-      setStatusMessage("선택 리드의 점수를 재계산했습니다.");
+
+      setStatusMessage("선택한 리드의 점수를 다시 계산했습니다.");
     } catch {
       setStatusMessage("API가 준비되면 점수 재계산이 가능합니다.");
     }
@@ -369,12 +385,10 @@ export function LeadsClient() {
         <div>
           <h1 style={{ marginBottom: 8 }}>리드 리스트</h1>
           <p style={{ margin: 0, color: "#94a3b8" }}>
-            필터링, 빠른 등록, 상세 보기, 점수 재계산까지 한 화면에서 시작합니다.
+            필터, 빠른 등록, 상세 확인, 점수 재계산까지 한 화면에서 다룹니다.
           </p>
         </div>
-        <div style={{ color: "#7dd3fc" }}>
-          {isLoading ? "불러오는 중..." : statusMessage}
-        </div>
+        <div style={{ color: "#7dd3fc" }}>{isLoading ? "불러오는 중..." : statusMessage}</div>
       </section>
 
       <section
@@ -526,12 +540,8 @@ export function LeadsClient() {
                   textAlign: "left",
                   padding: 14,
                   borderRadius: 12,
-                  border:
-                    selectedLeadId === lead.id
-                      ? "1px solid #38bdf8"
-                      : "1px solid #1f2937",
-                  background:
-                    selectedLeadId === lead.id ? "#082f49" : "#020617",
+                  border: selectedLeadId === lead.id ? "1px solid #38bdf8" : "1px solid #1f2937",
+                  background: selectedLeadId === lead.id ? "#082f49" : "#020617",
                   color: "#e2e8f0",
                   cursor: "pointer"
                 }}
@@ -547,7 +557,7 @@ export function LeadsClient() {
                   <span style={scoreBadgeStyle}>{lead.totalScore}</span>
                 </div>
                 <div style={{ color: "#94a3b8", marginTop: 4 }}>
-                  {lead.handle} · {lead.platform}
+                  {lead.handle} / {lead.platform}
                 </div>
                 <div
                   style={{
@@ -590,8 +600,8 @@ export function LeadsClient() {
               <div>
                 <h3 style={{ marginBottom: 6 }}>{selectedLead.displayName}</h3>
                 <div style={{ color: "#94a3b8" }}>
-                  {selectedLead.handle} · {selectedLead.platform} ·{" "}
-                  {selectedLead.followerCount ?? 0} followers
+                  {selectedLead.handle} / {selectedLead.platform} / 팔로워{" "}
+                  {selectedLead.followerCount ?? 0}
                 </div>
               </div>
 
@@ -631,7 +641,7 @@ export function LeadsClient() {
               </div>
 
               <div style={itemCardStyle}>
-                <strong>리뷰 메모</strong>
+                <strong>검수 메모</strong>
                 <p style={{ color: "#cbd5e1", marginBottom: 0 }}>
                   {selectedLead.reviewNotes ?? "아직 메모가 없습니다."}
                 </p>
@@ -658,15 +668,13 @@ export function LeadsClient() {
                       </a>
                     ))
                   ) : (
-                    <div style={{ color: "#94a3b8", marginTop: 10 }}>
-                      아직 저장된 게시물이 없습니다.
-                    </div>
+                    <div style={{ color: "#94a3b8", marginTop: 10 }}>최근 게시물이 없습니다.</div>
                   )}
                 </div>
               </div>
             </div>
           ) : (
-            <p style={{ color: "#94a3b8" }}>선택된 리드가 없습니다.</p>
+            <p style={{ color: "#94a3b8" }}>선택한 리드가 없습니다.</p>
           )}
         </section>
       </section>
@@ -717,21 +725,21 @@ function toSummary(detail: LeadDetail): LeadSummary {
   };
 }
 
-const itemCardStyle = {
+const itemCardStyle: CSSProperties = {
   background: "#020617",
   border: "1px solid #1f2937",
   borderRadius: 12,
   padding: 14
 };
 
-const subtleCardStyle = {
+const subtleCardStyle: CSSProperties = {
   background: "#0f172a",
   border: "1px solid #1e293b",
   borderRadius: 10,
   padding: 10
 };
 
-const primaryButtonStyle = {
+const primaryButtonStyle: CSSProperties = {
   padding: "10px 14px",
   borderRadius: 10,
   border: "none",
@@ -741,7 +749,7 @@ const primaryButtonStyle = {
   cursor: "pointer"
 };
 
-const secondaryButtonStyle = {
+const secondaryButtonStyle: CSSProperties = {
   padding: "10px 14px",
   borderRadius: 10,
   border: "1px solid #334155",
@@ -751,9 +759,9 @@ const secondaryButtonStyle = {
   cursor: "pointer"
 };
 
-const scoreBadgeStyle = {
+const scoreBadgeStyle: CSSProperties = {
   minWidth: 40,
-  textAlign: "center" as const,
+  textAlign: "center",
   padding: "4px 10px",
   borderRadius: 999,
   background: "#0ea5e9",

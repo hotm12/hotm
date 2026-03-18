@@ -23,101 +23,101 @@ export class CampaignsController {
   constructor(private readonly campaignsService: CampaignsService) {}
 
   @Get()
-  findAll() {
+  async findAll() {
     return {
-      data: this.campaignsService.findAll()
+      data: await this.campaignsService.findAll()
     };
   }
 
   @Get(":id")
-  findOne(@Param("id", ParseIntPipe) id: number) {
+  async findOne(@Param("id", ParseIntPipe) id: number) {
     return {
-      data: this.campaignsService.findOne(id)
+      data: await this.campaignsService.findOne(id)
     };
   }
 
   @Post()
-  create(@Body() payload: CreateCampaignDto) {
+  async create(@Body() payload: CreateCampaignDto) {
     return {
-      data: this.campaignsService.create(payload)
+      data: await this.campaignsService.create(payload)
     };
   }
 
   @Patch(":id")
-  update(
+  async update(
     @Param("id", ParseIntPipe) id: number,
     @Body() payload: UpdateCampaignDto
   ) {
     return {
-      data: this.campaignsService.update(id, payload)
+      data: await this.campaignsService.update(id, payload)
     };
   }
 
   @Get(":id/sources")
-  listSources(@Param("id", ParseIntPipe) id: number) {
+  async listSources(@Param("id", ParseIntPipe) id: number) {
     return {
-      data: this.campaignsService.listSources(id)
+      data: await this.campaignsService.listSources(id)
     };
   }
 
   @Post(":id/sources")
-  addSource(
+  async addSource(
     @Param("id", ParseIntPipe) id: number,
     @Body() payload: CreateCampaignSourceDto
   ) {
     return {
-      data: this.campaignsService.addSource(id, payload)
+      data: await this.campaignsService.addSource(id, payload)
     };
   }
 
   @Get(":id/filters")
-  listFilters(@Param("id", ParseIntPipe) id: number) {
+  async listFilters(@Param("id", ParseIntPipe) id: number) {
     return {
-      data: this.campaignsService.listFilters(id)
+      data: await this.campaignsService.listFilters(id)
     };
   }
 
   @Post(":id/filters")
-  addFilter(
+  async addFilter(
     @Param("id", ParseIntPipe) id: number,
     @Body() payload: CreateCampaignFilterDto
   ) {
     return {
-      data: this.campaignsService.addFilter(id, payload)
+      data: await this.campaignsService.addFilter(id, payload)
     };
   }
 
   @Get(":id/scoring-rule-set")
-  getScoringRuleSet(@Param("id", ParseIntPipe) id: number) {
+  async getScoringRuleSet(@Param("id", ParseIntPipe) id: number) {
     return {
-      data: this.campaignsService.getScoringRuleSet(id)
+      data: await this.campaignsService.getScoringRuleSet(id)
     };
   }
 
   @Put(":id/scoring-rule-set")
-  upsertScoringRuleSet(
+  async upsertScoringRuleSet(
     @Param("id", ParseIntPipe) id: number,
     @Body() payload: UpsertScoringRuleSetDto
   ) {
     return {
-      data: this.campaignsService.upsertScoringRuleSet(id, payload)
+      data: await this.campaignsService.upsertScoringRuleSet(id, payload)
     };
   }
 
   @Get(":id/review-checklist-template")
-  getReviewChecklistTemplate(@Param("id", ParseIntPipe) id: number) {
+  async getReviewChecklistTemplate(@Param("id", ParseIntPipe) id: number) {
     return {
-      data: this.campaignsService.getReviewChecklistTemplate(id)
+      data: await this.campaignsService.getReviewChecklistTemplate(id)
     };
   }
 
   @Put(":id/review-checklist-template")
-  upsertReviewChecklistTemplate(
+  async upsertReviewChecklistTemplate(
     @Param("id", ParseIntPipe) id: number,
     @Body() payload: UpsertReviewChecklistTemplateDto
   ) {
     return {
-      data: this.campaignsService.upsertReviewChecklistTemplate(id, payload)
+      data: await this.campaignsService.upsertReviewChecklistTemplate(id, payload)
     };
   }
 }

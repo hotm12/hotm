@@ -39,6 +39,13 @@ export interface LeadScoreDto {
   scoreBreakdown: LeadScoreBreakdownDto[];
 }
 
+export interface ReviewChecklistAnswerDto {
+  id: number;
+  label: string;
+  passed: boolean | null;
+  note?: string;
+}
+
 export interface LeadDetailDto extends LeadSummaryDto {
   bio?: string;
   postCount?: number;
@@ -46,6 +53,7 @@ export interface LeadDetailDto extends LeadSummaryDto {
   contacts: LeadContactDto[];
   posts: LeadPostDto[];
   score: LeadScoreDto;
+  reviewChecklistAnswers: ReviewChecklistAnswerDto[];
 }
 
 export interface CreateLeadDto {

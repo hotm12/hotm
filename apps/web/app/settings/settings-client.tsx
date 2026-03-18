@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { FormEvent, useEffect, useState } from "react";
 
 type CampaignSummary = {
@@ -175,14 +175,14 @@ const seedCampaigns: CampaignSummary[] = [
   }
 ];
 
-const formSectionStyle = {
+const formSectionStyle: CSSProperties = {
   background: "#111827",
   border: "1px solid #1f2937",
   borderRadius: 16,
   padding: 20
 };
 
-const inputStyle = {
+const inputStyle: CSSProperties = {
   width: "100%",
   padding: "10px 12px",
   borderRadius: 10,
@@ -864,14 +864,14 @@ function Field(props: { label: string; children: ReactNode }) {
   );
 }
 
-const itemCardStyle = {
+const itemCardStyle: CSSProperties = {
   background: "#020617",
   border: "1px solid #1f2937",
   borderRadius: 12,
   padding: 12
 };
 
-const primaryButtonStyle = {
+const primaryButtonStyle: CSSProperties = {
   padding: "10px 14px",
   borderRadius: 10,
   border: "none",
@@ -881,7 +881,7 @@ const primaryButtonStyle = {
   cursor: "pointer"
 };
 
-const secondaryButtonStyle = {
+const secondaryButtonStyle: CSSProperties = {
   padding: "10px 14px",
   borderRadius: 10,
   border: "1px solid #334155",

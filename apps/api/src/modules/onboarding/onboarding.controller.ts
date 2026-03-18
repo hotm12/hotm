@@ -1,14 +1,47 @@
-import { Controller, Get, Param } from "@nestjs/common";
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  ParseIntPipe,
+  Patch,
+  Post
+} from "@nestjs/common";
+import { OnboardingService } from "./onboarding.service";
+import { StartOnboardingDto, UpdateOnboardingDto } from "./onboarding.types";
 
 @Controller("onboarding")
 export class OnboardingController {
-  @Get(":leadId")
-  getDetail(@Param("leadId") leadId: string) {
+  constructor(private readonly onboardingService: OnboardingService) {}
+
+  @Get()
+  async findAll() {
     return {
-      data: {
-        leadId
-      },
-      message: "온보딩 상세 자리입니다."
+      data: await this.onboardingService.findAll()
+    };
+  }
+
+  @Get(":leadId")
+  async getDetail(@Param("leadId", ParseIntPipe) leadId: number) {
+    return {
+      data: await this.onboardingService.findOne(leadId)
+    };
+  }
+
+  @Post("start")
+  async start(@Body() payload: StartOnboardingDto) {
+    return {
+      data: await this.onboardingService.start(payload)
+    };
+  }
+
+  @Patch(":leadId")
+  async update(
+    @Param("leadId", ParseIntPipe) leadId: number,
+    @Body() payload: UpdateOnboardingDto
+  ) {
+    return {
+      data: await this.onboardingService.update(leadId, payload)
     };
   }
 }

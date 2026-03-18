@@ -3,13 +3,15 @@
   "private": true,
   "version": "0.1.0",
   "scripts": {
-    "start:dev": "nest start --watch",
-    "build": "nest build"
+    "start:dev": "..\\..\\scripts\\run-with-npm-node.cmd ..\\..\\node_modules\\@nestjs\\cli\\bin\\nest.js start --watch",
+    "build": "..\\..\\scripts\\run-with-npm-node.cmd ..\\..\\node_modules\\@nestjs\\cli\\bin\\nest.js build"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.0",
     "@nestjs/core": "^11.0.0",
     "@nestjs/platform-express": "^11.0.0",
+    "@prisma/client": "^6.0.0",
+    "dotenv": "^17.2.3",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1"
   },
