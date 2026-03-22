@@ -1,90 +1,177 @@
 # Seller Find
 
-Seller outreach MVP를 문서 기반으로 구현 중인 모노레포입니다.
+Seller outreach MVP built from the planning documents in `C:\SellerFind\SellerOutreachMVP`.
 
-## 구성
-- `C:\SellerFind\SellerOutreachMVP`: 기획/설계 문서
-- `C:\SellerFind\apps\web`: Next.js 프론트엔드
+## Workspace
+- `C:\SellerFind\SellerOutreachMVP`: product and execution documents
+- `C:\SellerFind\apps\web`: Next.js web app
 - `C:\SellerFind\apps\api`: NestJS API
-- `C:\SellerFind\packages\db`: Prisma 스키마와 DB 패키지
-- `C:\SellerFind\scripts`: Windows 실행 보조 스크립트와 임베디드 PostgreSQL 스크립트
+- `C:\SellerFind\packages\db`: Prisma schema and DB package
+- `C:\SellerFind\scripts`: Windows helper scripts and embedded PostgreSQL scripts
 
-## 현재 구현 범위
-- 캠페인 설정 CRUD
-- 리드 목록/상세/등록/점수 계산
-- 검수 큐 조회와 승인/보류/제외 처리
-- 아웃리치 큐, 메시지 미리보기, 승인, 이메일 발송, DM 큐 등록
-- CRM 보드, 답장 등록, 단계 이동, 활동 메모
-- 온보딩 목록/상세/시작/업데이트
-- 운영 대시보드
-- 감사 로그 조회
+## Current MVP Scope
+- Campaign settings CRUD
+- Instagram discovery runs for public candidate collection, preview, and import
+- Lead list, detail, create, score recalculation
+- Lead detail editing for profile, contact, status, CRM stage, and notes
+- Lead detail actions for adding/removing contacts and adding tracked posts
+- Review queue with approve, hold, and do-not-contact decisions
+- Outreach queue with preview, approve, send email, and queue DM
+- Outreach safety checks for approval required, duplicate send prevention, and DO_NOT_CONTACT blocking
+- Outreach approval confirmation with operator note support
+- CRM board with reply logging, stage moves, and activity notes
+- Onboarding list, detail, start, and update
+- Dashboard and audit log views
+- CSV/Excel import for leads with preview editing, mapping templates, and import history
 
-## 실행
-1. 의존성 설치
+## Run Locally
+1. Install dependencies
 ```bash
 npm install
 ```
 
-2. 환경 파일 확인
+2. Check env files
 - `C:\SellerFind\apps\web\.env.local`
 - `C:\SellerFind\apps\api\.env`
+- Add Instagram discovery env values in `apps/api/.env` when you want live Meta API collection:
+  - `INSTAGRAM_ACCESS_TOKEN`
+  - `INSTAGRAM_USER_ID`
+  - `INSTAGRAM_API_VERSION`
 
-3. 웹 개발 서버 실행
+3. Run web
 ```bash
 npm run dev:web
 ```
 
-4. API 개발 서버 실행
+4. Run API
 ```bash
 npm run dev:api
 ```
 
-5. Prisma Client 생성
+Quick start by double-click
+- Double-click [start-seller-find.cmd](C:\SellerFind\start-seller-find.cmd) to open the API and web dev servers in separate windows.
+- The launcher also opens the browser to [http://localhost:3000](http://localhost:3000).
+
+5. Generate Prisma client
 ```bash
 npm run db:generate
 ```
 
-6. PostgreSQL 스키마 반영
+6. Push Prisma schema
 ```bash
 npm run db:push
 ```
 
-## 임베디드 PostgreSQL 개발 모드
-관리자 권한 없이 로컬 PostgreSQL 호환 개발 서버를 실행할 수 있습니다.
+## Embedded PostgreSQL Mode
+Use this mode when you want a local PostgreSQL-compatible database without a separate admin install.
 
-1. 임베디드 DB 시작
+1. Start embedded DB
 ```bash
 npm run db:start:embedded
 ```
 
-2. 임베디드 DB에 Prisma 스키마 반영
+2. Push schema into embedded DB
 ```bash
 npm run db:push:embedded
 ```
 
-3. API를 임베디드 DB 모드로 실행
+3. Run API against embedded DB
 ```bash
 npm run dev:api:embedded
 ```
 
-기본 연결 정보
+Default connection details
 - Host: `127.0.0.1`
 - Port: `5432`
 - User: `postgres`
 - Password: `postgres`
 - Database: `seller_find`
 
-기본 주소
-- Web: `http://localhost:3000`
-- API Health: `http://localhost:3001/api/health`
-- API Dashboard: `http://localhost:3001/api/dashboard`
-- API Audit Log: `http://localhost:3001/api/audit-log`
+## Data Storage Mode
+- If `DATABASE_URL` is empty in `apps/api/.env`, the API uses JSON fallback files.
+- If `DATABASE_URL` is set, the API uses Prisma with PostgreSQL first.
+- `ENABLE_DEV_SEED=false` disables demo seed insertion when you run against a real PostgreSQL database.
+- The dashboard now shows the active storage mode so you can quickly confirm whether you are using `DATABASE` or `JSON_FALLBACK`.
 
-## 저장 방식
-- `apps/api/.env`에서 `DATABASE_URL`이 비어 있으면 JSON fallback으로 동작합니다.
-- `DATABASE_URL`이 있으면 Prisma/PostgreSQL을 우선 사용합니다.
-- 현재 `campaigns`, `leads`, `review`, `outreach`, `crm`, `onboarding`, `dashboard`, `audit-log`가 같은 흐름을 따릅니다.
+## Lead CSV Import
+You can now import leads from the Leads page by either:
+- pasting CSV text into the `CSV import` panel
+- selecting a local `.csv` file
+- selecting a local `.xlsx` or `.xls` file
 
-## 참고
-- Codex 앱의 PATH 이슈를 피하기 위해 루트 스크립트는 `scripts/run-npm.cmd`, 각 workspace 스크립트는 `scripts/run-with-npm-node.cmd`를 사용합니다.
-- API는 `http://localhost:3000`을 기본 허용 Origin으로 설정해두었습니다.
+Duplicate protection
+- Manual lead creation now blocks duplicate `handle` values inside the same campaign.
+- Manual lead creation also blocks duplicate `contactValue` values inside the same campaign.
+- CSV and Excel import skip duplicate or invalid rows and continue importing the rest.
+- You can preview import results before saving from the Leads page.
+- Detected CSV or Excel headers can be mapped to supported lead fields before preview/import.
+- Column mappings can be saved as reusable local templates from the Leads page.
+- Preview rows can edit `campaignId`, `platform`, `handle`, `displayName`, `category`, `followerCount`, `postCount`, `bio`, and `contactValue` before re-running preview or importing.
+- Preview rows can also be filtered by `READY` or `SKIP`, and unwanted rows can be removed before import.
+- Duplicate rows in preview can now be switched between `SKIP` and `OVERWRITE`.
+- Duplicate rows in preview can also use `MERGE` to fill only missing data on an existing lead.
+- Import history is available from the Leads page and records file name, template name, import counts, overwrite counts, and merge counts.
+- Import validation now checks required fields, supported `platform` values, email format, and outlier numeric ranges for followers and posts.
+
+Supported columns
+- `handle`
+- `displayName`
+- `platform`
+- `category`
+- `followerCount`
+- `postCount`
+- `bio`
+- `contactValue`
+- `campaignId`
+
+Template file
+- Use [lead-import-template.csv](C:\SellerFind\lead-import-template.csv) as a ready-to-fill import template.
+
+Example
+```csv
+handle,displayName,platform,category,followerCount,contactValue
+@sample_handle,Sample Seller,INSTAGRAM,K-Beauty,12000,sample@example.com
+```
+
+API endpoint
+- `POST /api/leads/import-csv`
+- `GET /api/leads/import-history`
+- `PATCH /api/leads/:id`
+- `POST /api/leads/:id/contacts`
+- `DELETE /api/leads/:id/contacts/:contactId`
+- `POST /api/leads/:id/posts`
+
+## Instagram Discovery
+Use the Discovery page to run manual Instagram discovery batches per campaign.
+
+What it does
+- reads `HASHTAG`, `SEED_ACCOUNT`, and `KEYWORD` campaign sources from Settings
+- stores a discovery run and candidate preview in PostgreSQL
+- lets the operator review candidates and choose `SKIP`, `OVERWRITE`, or `MERGE`
+- imports approved candidates into the existing lead pipeline
+
+Current limits
+- Discovery requires PostgreSQL mode and is disabled in JSON fallback mode.
+- `KEYWORD` sources are stored and shown in run results, but v1 treats them as manual enrichment hints rather than live Instagram API search.
+- `dryRun=true` uses mock candidates and does not call the Meta API.
+
+Discovery env
+- `INSTAGRAM_ACCESS_TOKEN`
+- `INSTAGRAM_USER_ID`
+- `INSTAGRAM_API_VERSION`
+
+Discovery endpoints
+- `POST /api/discovery/instagram/campaigns/:id/run`
+- `GET /api/discovery/runs`
+- `GET /api/discovery/runs/:runId`
+- `GET /api/discovery/runs/:runId/candidates`
+- `POST /api/discovery/runs/:runId/import`
+
+## Operator Prep
+- The dashboard includes a local operator profile panel for `name` and `role`.
+- Current role handling is a lightweight groundwork step: `VIEWER` is treated as read-only in write-heavy UI actions.
+- Operator names are passed with lead updates, imports, and outreach actions so audit logs can start capturing ownership.
+
+## Notes
+- Root scripts use `C:\SellerFind\scripts\run-npm.cmd` and workspace scripts use `C:\SellerFind\scripts\run-with-npm-node.cmd` to avoid PATH issues inside Codex.
+- The API allows `http://localhost:3000` as the default local origin.

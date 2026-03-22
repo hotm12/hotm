@@ -6,6 +6,7 @@ import {
   ensurePrimaryCampaignSeed
 } from "../../common/dev-seed";
 import { readJsonFile, writeJsonFile } from "../../common/json-file-store";
+import { isDatabaseStorageEnabled, isDevSeedEnabled } from "../../common/runtime-flags";
 import { PrismaService } from "../../prisma/prisma.service";
 import {
   CampaignDetailDto,
@@ -155,7 +156,8 @@ function createEmptyReviewChecklistTemplate(
 @Injectable()
 export class CampaignsService {
   private readonly stateFilePath = resolve(process.cwd(), ".data", "campaigns.json");
-  private readonly databaseEnabled = Boolean(process.env.DATABASE_URL?.trim());
+  private readonly databaseEnabled = isDatabaseStorageEnabled();
+  private readonly devSeedEnabled = isDevSeedEnabled();
   private nextCampaignId = 2;
   private nextSourceId = 3;
   private nextFilterId = 3;
@@ -622,7 +624,7 @@ export class CampaignsService {
   }
 
   private async ensureDatabaseSeed() {
-    if (!this.databaseEnabled) {
+    if (!this.databaseEnabled || !this.devSeedEnabled) {
       return;
     }
 

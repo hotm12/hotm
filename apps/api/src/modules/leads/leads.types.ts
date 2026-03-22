@@ -66,6 +66,96 @@ export interface CreateLeadDto {
   postCount?: number;
   bio?: string;
   contactValue?: string;
+  actor?: string;
+}
+
+export interface UpdateLeadDto {
+  campaignId?: number;
+  platform?: string;
+  handle?: string;
+  displayName?: string;
+  category?: string;
+  followerCount?: number;
+  postCount?: number;
+  bio?: string;
+  contactValue?: string;
+  leadStatus?: string;
+  crmStage?: string;
+  reviewNotes?: string;
+  actor?: string;
+}
+
+export interface ImportLeadsCsvDto {
+  csvText: string;
+  campaignId?: number;
+  platform?: string;
+  fileName?: string;
+  templateName?: string;
+  actor?: string;
+  actions?: Array<{
+    rowNumber: number;
+    action: "SKIP" | "OVERWRITE" | "MERGE";
+  }>;
+}
+
+export interface ImportLeadsCsvSkippedItemDto {
+  rowNumber: number;
+  reason: string;
+  handle?: string;
+  contactValue?: string;
+}
+
+export interface ImportLeadsCsvResultDto {
+  imported: LeadDetailDto[];
+  skipped: ImportLeadsCsvSkippedItemDto[];
+}
+
+export interface ImportLeadsCsvPreviewRowDto {
+  rowNumber: number;
+  campaignId: number;
+  platform: string;
+  handle?: string;
+  displayName?: string;
+  category?: string;
+  followerCount?: number;
+  postCount?: number;
+  bio?: string;
+  contactValue?: string;
+  status: "READY" | "SKIP";
+  reason?: string;
+}
+
+export interface ImportLeadsCsvPreviewResultDto {
+  rows: ImportLeadsCsvPreviewRowDto[];
+  readyCount: number;
+  skipCount: number;
+}
+
+export interface LeadImportHistoryItemDto {
+  id: number;
+  fileName?: string;
+  templateName?: string;
+  campaignId?: number;
+  platform?: string;
+  importedCount: number;
+  skippedCount: number;
+  overwriteCount: number;
+  mergeCount: number;
+  createdAt: string;
+}
+
+export interface CreateLeadContactDto {
+  contactType: string;
+  contactValue: string;
+  isPrimary?: boolean;
+  actor?: string;
+}
+
+export interface CreateLeadPostDto {
+  postUrl: string;
+  caption?: string;
+  postedAt?: string;
+  actor?: string;
 }
 
 export interface LeadListQueryDto {

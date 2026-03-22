@@ -1,6 +1,6 @@
 "use client";
 
-import type { CSSProperties, ReactNode } from "react";
+import type { CSSProperties, FormEvent } from "react";
 import { useEffect, useState } from "react";
 
 type ReviewQueueItem = {
@@ -46,118 +46,71 @@ type ReviewDetail = {
 
 const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:3001/api";
 
-const fallbackDetails: ReviewDetail[] = [
+const fallbackQueue: ReviewQueueItem[] = [
   {
-    id: 1,
-    displayName: "KBeauty Store Lab",
-    handle: "@kbeauty_store_lab",
+    leadId: 2,
+    displayName: "Daily Beauty Pick",
+    handle: "@daily_beauty_pick",
     platform: "INSTAGRAM",
     leadStatus: "REVIEW_READY",
-    totalScore: 40,
-    scoreGrade: "A",
-    riskFlags: ["민감 성분 검토 필요"],
-    reviewNotes: "프로필 링크와 공개 이메일이 있어 검수 우선순위가 높습니다.",
-    reviewChecklistAnswers: [
-      {
-        id: 1,
-        label: "실제 판매 계정 여부",
-        passed: true,
-        note: "상품 링크와 판매 문구가 명확합니다."
-      },
-      {
-        id: 2,
-        label: "공개 연락 채널 존재 여부",
-        passed: true,
-        note: "프로필에 이메일이 공개되어 있습니다."
-      },
-      {
-        id: 3,
-        label: "민감 카테고리 여부",
-        passed: false,
-        note: "민감 성분 검토가 필요합니다."
-      }
-    ],
-    score: {
-      totalScore: 40,
-      scoreGrade: "A",
-      scoreBreakdown: [
-        {
-          label: "팔로워 규모",
-          scoreDelta: 25,
-          reason: "팔로워가 1만 명 이상입니다."
-        },
-        {
-          label: "공개 이메일",
-          scoreDelta: 15,
-          reason: "공개 이메일 연락처가 존재합니다."
-        }
-      ]
-    }
-  },
-  {
-    id: 2,
-    displayName: "Seoul Skin Archive",
-    handle: "@seoul_skin_archive",
-    platform: "INSTAGRAM",
-    leadStatus: "NEW",
-    totalScore: 15,
-    scoreGrade: "C",
-    riskFlags: [],
-    reviewNotes: "콘텐츠 톤은 좋지만 판매 채널 명확성은 추가 확인이 필요합니다.",
-    reviewChecklistAnswers: [
-      {
-        id: 4,
-        label: "실제 판매 계정 여부",
-        passed: null,
-        note: ""
-      },
-      {
-        id: 5,
-        label: "공개 연락 채널 존재 여부",
-        passed: false,
-        note: "이메일이 아직 확인되지 않았습니다."
-      }
-    ],
-    score: {
-      totalScore: 15,
-      scoreGrade: "C",
-      scoreBreakdown: [
-        {
-          label: "팔로워 규모",
-          scoreDelta: 15,
-          reason: "팔로워가 3천 명 이상입니다."
-        }
-      ]
-    }
+    totalScore: 31,
+    scoreGrade: "B",
+    riskFlags: ["이메일 미확인"],
+    checklistProgress: "1/3"
   }
 ];
 
-const fallbackQueue: ReviewQueueItem[] = fallbackDetails.map((detail) => ({
-  leadId: detail.id,
-  displayName: detail.displayName,
-  handle: detail.handle,
-  platform: detail.platform,
-  leadStatus: detail.leadStatus,
-  totalScore: detail.totalScore,
-  scoreGrade: detail.scoreGrade,
-  riskFlags: detail.riskFlags,
-  checklistProgress: `${detail.reviewChecklistAnswers.filter((item) => item.passed !== null).length}/${detail.reviewChecklistAnswers.length}`
-}));
-
-const panelStyle: CSSProperties = {
-  background: "#111827",
-  border: "1px solid #1f2937",
-  borderRadius: 16,
-  padding: 20
-};
-
-const inputStyle: CSSProperties = {
-  width: "100%",
-  padding: "10px 12px",
-  borderRadius: 10,
-  border: "1px solid #334155",
-  background: "#020617",
-  color: "#e2e8f0"
+const fallbackDetail: ReviewDetail = {
+  id: 2,
+  displayName: "Daily Beauty Pick",
+  handle: "@daily_beauty_pick",
+  platform: "INSTAGRAM",
+  leadStatus: "REVIEW_READY",
+  totalScore: 31,
+  scoreGrade: "B",
+  riskFlags: ["이메일 미확인"],
+  reviewNotes: "추가 연락 수단 확인이 필요합니다.",
+  reviewChecklistAnswers: [
+    {
+      id: 1,
+      label: "실제 판매 계정 여부",
+      passed: true,
+      note: "판매 게시물과 후기 콘텐츠를 확인했습니다."
+    },
+    {
+      id: 2,
+      label: "공개 연락 채널 존재 여부",
+      passed: false,
+      note: "DM 외 직접 연락 수단이 보이지 않습니다."
+    },
+    {
+      id: 3,
+      label: "브랜드 안전성 검토",
+      passed: null,
+      note: ""
+    }
+  ],
+  score: {
+    totalScore: 31,
+    scoreGrade: "B",
+    scoreBreakdown: [
+      {
+        label: "팔로워 규모",
+        scoreDelta: 15,
+        reason: "기본 탐색 기준을 넘었습니다."
+      },
+      {
+        label: "콘텐츠 일관성",
+        scoreDelta: 10,
+        reason: "뷰티 카테고리에 집중된 계정입니다."
+      },
+      {
+        label: "직접 연락 가능성",
+        scoreDelta: 6,
+        reason: "공개 이메일 부재로 가점이 제한됩니다."
+      }
+    ]
+  }
 };
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -178,35 +131,41 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export function ReviewClient() {
-  const [queue, setQueue] = useState<ReviewQueueItem[]>([]);
+  const [items, setItems] = useState<ReviewQueueItem[]>([]);
   const [selectedLeadId, setSelectedLeadId] = useState<number | null>(null);
   const [detail, setDetail] = useState<ReviewDetail | null>(null);
-  const [statusMessage, setStatusMessage] = useState("검수 큐를 불러오는 중입니다.");
-  const [isLoading, setIsLoading] = useState(true);
+  const [draftNotes, setDraftNotes] = useState("");
+  const [draftAnswers, setDraftAnswers] = useState<ReviewChecklistAnswer[]>([]);
+  const [statusMessage, setStatusMessage] = useState("검수 대기열을 불러오는 중입니다.");
 
   useEffect(() => {
     void loadQueue();
   }, []);
 
-  async function loadQueue() {
-    setIsLoading(true);
-
+  async function loadQueue(preferredLeadId?: number | null) {
     try {
-      const nextQueue = await request<ReviewQueueItem[]>("/review-queue");
-      setQueue(nextQueue);
-      const nextLeadId = nextQueue[0]?.leadId ?? null;
+      const nextItems = await request<ReviewQueueItem[]>("/review-queue");
+      setItems(nextItems);
+
+      const nextLeadId =
+        nextItems.find((item) => item.leadId === preferredLeadId)?.leadId ?? nextItems[0]?.leadId ?? null;
+
       setSelectedLeadId(nextLeadId);
+
       if (nextLeadId) {
         await loadDetail(nextLeadId);
+      } else {
+        setDetail(null);
       }
-      setStatusMessage("API에서 검수 큐를 불러왔습니다.");
+
+      setStatusMessage("API에서 최신 검수 대기열을 불러왔습니다.");
     } catch {
-      setQueue(fallbackQueue);
-      setSelectedLeadId(fallbackQueue[0]?.leadId ?? null);
-      setDetail(fallbackDetails[0] ?? null);
-      setStatusMessage("API가 준비되지 않아 샘플 검수 큐를 표시 중입니다.");
-    } finally {
-      setIsLoading(false);
+      setItems(fallbackQueue);
+      setSelectedLeadId(fallbackDetail.id);
+      setDetail(fallbackDetail);
+      setDraftNotes(fallbackDetail.reviewNotes ?? "");
+      setDraftAnswers(fallbackDetail.reviewChecklistAnswers);
+      setStatusMessage("API 연결이 없어 예시 검수 데이터를 표시 중입니다.");
     }
   }
 
@@ -214,370 +173,496 @@ export function ReviewClient() {
     try {
       const nextDetail = await request<ReviewDetail>(`/review-queue/${leadId}`);
       setDetail(nextDetail);
+      setDraftNotes(nextDetail.reviewNotes ?? "");
+      setDraftAnswers(nextDetail.reviewChecklistAnswers);
     } catch {
-      setDetail(fallbackDetails.find((item) => item.id === leadId) ?? null);
+      setDetail(fallbackDetail);
+      setDraftNotes(fallbackDetail.reviewNotes ?? "");
+      setDraftAnswers(fallbackDetail.reviewChecklistAnswers);
     }
   }
 
-  async function handleDecision(decisionStatus: string) {
-    if (!selectedLeadId || !detail) {
+  async function submitReview(decisionStatus: string) {
+    if (!selectedLeadId) {
       return;
     }
 
     try {
-      const nextDetail = await request<ReviewDetail>(`/review-queue/${selectedLeadId}/submit`, {
+      await request(`/review-queue/${selectedLeadId}/submit`, {
         method: "POST",
         body: JSON.stringify({
           decisionStatus,
-          reviewNotes: detail.reviewNotes,
-          checklistAnswers: detail.reviewChecklistAnswers.map((item) => ({
-            label: item.label,
-            passed: item.passed,
-            note: item.note
+          reviewNotes: draftNotes,
+          checklistAnswers: draftAnswers.map((answer) => ({
+            label: answer.label,
+            passed: answer.passed,
+            note: answer.note
           }))
         })
       });
 
-      setDetail(nextDetail);
-      await loadQueue();
-      setStatusMessage(`리드를 ${decisionStatus} 상태로 저장했습니다.`);
+      setStatusMessage(`검수 결과를 ${decisionStatus} 상태로 저장했습니다.`);
+      await loadQueue(selectedLeadId);
     } catch {
-      const localDetail: ReviewDetail = {
-        ...detail,
-        leadStatus: decisionStatus
-      };
-      const nextQueue =
-        decisionStatus === "ON_HOLD"
-          ? queue.map((item) =>
-              item.leadId === selectedLeadId
-                ? {
-                    ...item,
-                    leadStatus: decisionStatus,
-                    checklistProgress: `${localDetail.reviewChecklistAnswers.filter((answer) => answer.passed !== null).length}/${localDetail.reviewChecklistAnswers.length}`
-                  }
-                : item
-            )
-          : queue.filter((item) => item.leadId !== selectedLeadId);
-
-      setQueue(nextQueue);
-      if (decisionStatus === "ON_HOLD") {
-        setDetail(localDetail);
-      } else {
-        const nextLeadId = nextQueue[0]?.leadId ?? null;
-        setSelectedLeadId(nextLeadId);
-        setDetail(nextLeadId ? fallbackDetails.find((item) => item.id === nextLeadId) ?? null : null);
-      }
-      setStatusMessage("샘플 모드에서 검수 상태를 갱신했습니다.");
+      setStatusMessage("검수 결과 저장에 실패했습니다.");
     }
   }
 
+  function handleChecklistNote(answerId: number, value: string) {
+    setDraftAnswers((current) =>
+      current.map((item) => (item.id === answerId ? { ...item, note: value } : item))
+    );
+  }
+
+  function handleChecklistResult(answerId: number, passed: boolean | null) {
+    setDraftAnswers((current) =>
+      current.map((item) => (item.id === answerId ? { ...item, passed } : item))
+    );
+  }
+
+  function handleSelectLead(leadId: number) {
+    setSelectedLeadId(leadId);
+    void loadDetail(leadId);
+  }
+
+  function preventSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+  }
+
   return (
-    <main style={{ padding: 32, display: "grid", gap: 20 }}>
-      <section
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center"
-        }}
-      >
+    <main style={pageStyle}>
+      <section style={heroStyle}>
         <div>
-          <h1 style={{ marginBottom: 8 }}>검수 큐</h1>
-          <p style={{ margin: 0, color: "#94a3b8" }}>
-            점수와 위험 신호를 확인하고 승인, 보류, 제외를 처리합니다.
+          <div style={eyebrowStyle}>Review Queue</div>
+          <h1 style={titleStyle}>리드 검수 워크스페이스</h1>
+          <p style={descriptionStyle}>
+            점수, 리스크, 체크리스트 응답을 함께 보고 승인, 보류, 연락 금지 여부를 결정할 수 있습니다.
           </p>
         </div>
-        <div style={{ color: "#7dd3fc" }}>{isLoading ? "불러오는 중..." : statusMessage}</div>
+        <div style={statusStyle}>{statusMessage}</div>
       </section>
 
-      <section
-        style={{
-          display: "grid",
-          gridTemplateColumns: "360px 1fr",
-          gap: 20,
-          alignItems: "start"
-        }}
-      >
-        <aside style={panelStyle}>
-          <h2 style={{ marginTop: 0 }}>검수 대상</h2>
-          <div style={{ display: "grid", gap: 10 }}>
-            {queue.map((item) => (
+      <section style={layoutStyle}>
+        <article style={panelStyle}>
+          <div style={headerRowStyle}>
+            <h2 style={sectionTitleStyle}>검수 대기열</h2>
+            <span style={badgeStyle}>{items.length}건</span>
+          </div>
+          <div style={listStyle}>
+            {items.map((item) => (
               <button
                 key={item.leadId}
-                onClick={() => {
-                  setSelectedLeadId(item.leadId);
-                  void loadDetail(item.leadId);
-                }}
+                type="button"
+                onClick={() => handleSelectLead(item.leadId)}
                 style={{
-                  textAlign: "left",
-                  padding: 14,
-                  borderRadius: 12,
-                  border: selectedLeadId === item.leadId ? "1px solid #38bdf8" : "1px solid #1f2937",
-                  background: selectedLeadId === item.leadId ? "#082f49" : "#020617",
-                  color: "#e2e8f0",
-                  cursor: "pointer"
+                  ...itemButtonStyle,
+                  borderColor: item.leadId === selectedLeadId ? "#38bdf8" : "#1e293b"
                 }}
               >
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    gap: 10
-                  }}
-                >
+                <div style={rowStyle}>
                   <strong>{item.displayName}</strong>
-                  <span style={scoreBadgeStyle}>{item.totalScore}</span>
+                  <span style={tagStyle}>{item.scoreGrade}</span>
                 </div>
-                <div style={{ color: "#94a3b8", marginTop: 4 }}>
+                <div style={mutedTextStyle}>
                   {item.handle} · {item.platform}
                 </div>
-                <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
-                  <Tag>{item.leadStatus}</Tag>
-                  <Tag>{item.scoreGrade}</Tag>
-                  <Tag>{item.checklistProgress}</Tag>
+                <div style={itemMetaStyle}>
+                  <span>{item.leadStatus}</span>
+                  <span>{item.checklistProgress}</span>
                 </div>
-                {item.riskFlags.length > 0 ? (
-                  <div style={{ color: "#fda4af", fontSize: 13, marginTop: 10 }}>
-                    위험: {item.riskFlags.join(", ")}
-                  </div>
-                ) : null}
               </button>
             ))}
           </div>
-        </aside>
+        </article>
 
-        <section style={panelStyle}>
+        <article style={panelStyle}>
           {detail ? (
-            <div style={{ display: "grid", gap: 16 }}>
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "start"
-                }}
-              >
+            <form style={detailGridStyle} onSubmit={preventSubmit}>
+              <div style={headerRowStyle}>
                 <div>
-                  <h2 style={{ marginTop: 0, marginBottom: 6 }}>{detail.displayName}</h2>
-                  <div style={{ color: "#94a3b8" }}>
+                  <h2 style={sectionTitleStyle}>{detail.displayName}</h2>
+                  <div style={mutedTextStyle}>
                     {detail.handle} · {detail.platform}
                   </div>
                 </div>
-                <div style={{ display: "flex", gap: 8 }}>
-                  <button type="button" style={approveButtonStyle} onClick={() => void handleDecision("APPROVED")}>
-                    승인
-                  </button>
-                  <button type="button" style={holdButtonStyle} onClick={() => void handleDecision("ON_HOLD")}>
-                    보류
-                  </button>
-                  <button type="button" style={rejectButtonStyle} onClick={() => void handleDecision("REJECTED")}>
-                    제외
-                  </button>
+                <span style={tagStyle}>{detail.leadStatus}</span>
+              </div>
+
+              <div style={statsGridStyle}>
+                <div style={statCardStyle}>
+                  <span style={mutedTextStyle}>총점</span>
+                  <strong style={statValueStyle}>{detail.totalScore}</strong>
+                </div>
+                <div style={statCardStyle}>
+                  <span style={mutedTextStyle}>등급</span>
+                  <strong style={statValueStyle}>{detail.scoreGrade}</strong>
+                </div>
+                <div style={statCardStyle}>
+                  <span style={mutedTextStyle}>리스크</span>
+                  <strong style={statValueStyle}>{detail.riskFlags.length}</strong>
                 </div>
               </div>
 
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
-                <div style={itemCardStyle}>
-                  <strong>점수 요약</strong>
-                  <div style={{ fontSize: 28, fontWeight: 800, marginTop: 8 }}>
-                    {detail.score.totalScore}
-                  </div>
-                  <div style={{ color: "#7dd3fc", marginTop: 4 }}>
-                    Grade {detail.score.scoreGrade}
-                  </div>
-                  <div style={{ display: "grid", gap: 8, marginTop: 12 }}>
-                    {detail.score.scoreBreakdown.map((item) => (
-                      <div key={item.label} style={subtleCardStyle}>
-                        <div style={{ display: "flex", justifyContent: "space-between" }}>
-                          <strong>{item.label}</strong>
-                          <span>{item.scoreDelta > 0 ? `+${item.scoreDelta}` : item.scoreDelta}</span>
-                        </div>
-                        <div style={{ color: "#94a3b8", fontSize: 14, marginTop: 4 }}>
-                          {item.reason}
+              <section style={sectionBlockStyle}>
+                <h3 style={subTitleStyle}>점수 근거</h3>
+                <div style={listStyle}>
+                  {detail.score.scoreBreakdown.map((item) => (
+                    <div key={`${item.label}-${item.reason}`} style={subCardStyle}>
+                      <div style={rowStyle}>
+                        <strong>{item.label}</strong>
+                        <span style={tagStyle}>
+                          {item.scoreDelta > 0 ? `+${item.scoreDelta}` : item.scoreDelta}
+                        </span>
+                      </div>
+                      <div style={mutedTextStyle}>{item.reason}</div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+
+              <section style={sectionBlockStyle}>
+                <h3 style={subTitleStyle}>체크리스트</h3>
+                <div style={listStyle}>
+                  {draftAnswers.map((answer) => (
+                    <div key={answer.id} style={subCardStyle}>
+                      <div style={rowStyle}>
+                        <strong>{answer.label}</strong>
+                        <div style={inlineButtonRowStyle}>
+                          <button
+                            type="button"
+                            style={answerButtonStyle(answer.passed === true)}
+                            onClick={() => handleChecklistResult(answer.id, true)}
+                          >
+                            통과
+                          </button>
+                          <button
+                            type="button"
+                            style={answerButtonStyle(answer.passed === false)}
+                            onClick={() => handleChecklistResult(answer.id, false)}
+                          >
+                            주의
+                          </button>
+                          <button
+                            type="button"
+                            style={answerButtonStyle(answer.passed === null)}
+                            onClick={() => handleChecklistResult(answer.id, null)}
+                          >
+                            미정
+                          </button>
                         </div>
                       </div>
-                    ))}
-                  </div>
-                </div>
-
-                <div style={itemCardStyle}>
-                  <strong>위험 신호</strong>
-                  <div style={{ display: "grid", gap: 8, marginTop: 12 }}>
-                    {detail.riskFlags.length > 0 ? (
-                      detail.riskFlags.map((flag) => (
-                        <div key={flag} style={warningCardStyle}>
-                          {flag}
-                        </div>
-                      ))
-                    ) : (
-                      <div style={{ color: "#94a3b8" }}>표시할 위험 신호가 없습니다.</div>
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              <div style={itemCardStyle}>
-                <strong>검수 체크리스트</strong>
-                <div style={{ display: "grid", gap: 12, marginTop: 12 }}>
-                  {detail.reviewChecklistAnswers.map((answer) => (
-                    <div key={answer.id} style={subtleCardStyle}>
-                      <div style={{ fontWeight: 700, marginBottom: 8 }}>{answer.label}</div>
-                      <select
-                        value={
-                          answer.passed === null ? "PENDING" : answer.passed ? "PASS" : "FAIL"
-                        }
-                        onChange={(event) =>
-                          setDetail((prev) =>
-                            prev
-                              ? {
-                                  ...prev,
-                                  reviewChecklistAnswers: prev.reviewChecklistAnswers.map((item) =>
-                                    item.id === answer.id
-                                      ? {
-                                          ...item,
-                                          passed:
-                                            event.target.value === "PENDING"
-                                              ? null
-                                              : event.target.value === "PASS"
-                                        }
-                                      : item
-                                  )
-                                }
-                              : prev
-                          )
-                        }
-                        style={inputStyle}
-                      >
-                        <option value="PENDING">보류</option>
-                        <option value="PASS">통과</option>
-                        <option value="FAIL">실패</option>
-                      </select>
                       <textarea
+                        style={textareaStyle}
                         value={answer.note ?? ""}
-                        onChange={(event) =>
-                          setDetail((prev) =>
-                            prev
-                              ? {
-                                  ...prev,
-                                  reviewChecklistAnswers: prev.reviewChecklistAnswers.map((item) =>
-                                    item.id === answer.id
-                                      ? {
-                                          ...item,
-                                          note: event.target.value
-                                        }
-                                      : item
-                                  )
-                                }
-                              : prev
-                          )
-                        }
-                        style={{ ...inputStyle, minHeight: 80, marginTop: 10 }}
+                        onChange={(event) => handleChecklistNote(answer.id, event.target.value)}
+                        placeholder="검수 메모를 입력하세요."
                       />
                     </div>
                   ))}
                 </div>
-              </div>
+              </section>
 
-              <div style={itemCardStyle}>
-                <strong>검수 메모</strong>
+              <section style={sectionBlockStyle}>
+                <h3 style={subTitleStyle}>종합 메모</h3>
                 <textarea
-                  value={detail.reviewNotes ?? ""}
-                  onChange={(event) =>
-                    setDetail((prev) =>
-                      prev
-                        ? {
-                            ...prev,
-                            reviewNotes: event.target.value
-                          }
-                        : prev
-                    )
-                  }
-                  style={{ ...inputStyle, minHeight: 120, marginTop: 12 }}
+                  style={largeTextareaStyle}
+                  value={draftNotes}
+                  onChange={(event) => setDraftNotes(event.target.value)}
+                  placeholder="최종 검수 판단 메모를 남겨주세요."
                 />
+              </section>
+
+              <section style={sectionBlockStyle}>
+                <h3 style={subTitleStyle}>리스크 플래그</h3>
+                {detail.riskFlags.length ? (
+                  <div style={chipRowStyle}>
+                    {detail.riskFlags.map((flag) => (
+                      <span key={flag} style={riskChipStyle}>
+                        {flag}
+                      </span>
+                    ))}
+                  </div>
+                ) : (
+                  <div style={emptyStyle}>현재 리스크 플래그가 없습니다.</div>
+                )}
+              </section>
+
+              <div style={actionRowStyle}>
+                <button type="button" style={primaryButtonStyle} onClick={() => void submitReview("APPROVED")}>
+                  승인
+                </button>
+                <button type="button" style={ghostButtonStyle} onClick={() => void submitReview("ON_HOLD")}>
+                  보류
+                </button>
+                <button type="button" style={dangerButtonStyle} onClick={() => void submitReview("DO_NOT_CONTACT")}>
+                  연락 금지
+                </button>
               </div>
-            </div>
+            </form>
           ) : (
-            <p style={{ color: "#94a3b8" }}>선택된 검수 대상이 없습니다.</p>
+            <div style={emptyStyle}>왼쪽 목록에서 검수할 리드를 선택해주세요.</div>
           )}
-        </section>
+        </article>
       </section>
     </main>
   );
 }
 
-function Tag(props: { children: ReactNode }) {
-  return (
-    <span
-      style={{
-        padding: "4px 8px",
-        borderRadius: 999,
-        background: "#0f172a",
-        border: "1px solid #1e293b",
-        color: "#cbd5e1",
-        fontSize: 12
-      }}
-    >
-      {props.children}
-    </span>
-  );
-}
+const pageStyle: CSSProperties = {
+  minHeight: "100vh",
+  padding: 32,
+  background:
+    "radial-gradient(circle at top right, rgba(34, 197, 94, 0.14), transparent 24%), #020617",
+  color: "#e2e8f0",
+  display: "grid",
+  gap: 20
+};
 
-const itemCardStyle: CSSProperties = {
+const heroStyle: CSSProperties = {
+  background: "rgba(15, 23, 42, 0.92)",
+  border: "1px solid #1e293b",
+  borderRadius: 24,
+  padding: 28,
+  display: "flex",
+  justifyContent: "space-between",
+  gap: 24,
+  alignItems: "flex-end"
+};
+
+const eyebrowStyle: CSSProperties = {
+  color: "#4ade80",
+  fontSize: 13,
+  letterSpacing: 1.2,
+  textTransform: "uppercase"
+};
+
+const titleStyle: CSSProperties = {
+  margin: "12px 0 10px",
+  fontSize: 36
+};
+
+const descriptionStyle: CSSProperties = {
+  margin: 0,
+  color: "#94a3b8",
+  maxWidth: 760,
+  lineHeight: 1.7
+};
+
+const statusStyle: CSSProperties = {
+  color: "#86efac",
+  fontSize: 14,
+  maxWidth: 320,
+  textAlign: "right"
+};
+
+const layoutStyle: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "minmax(280px, 360px) minmax(0, 1fr)",
+  gap: 20
+};
+
+const panelStyle: CSSProperties = {
+  background: "rgba(15, 23, 42, 0.92)",
+  border: "1px solid #1e293b",
+  borderRadius: 22,
+  padding: 24,
+  display: "grid",
+  gap: 16
+};
+
+const sectionTitleStyle: CSSProperties = {
+  margin: 0,
+  fontSize: 22
+};
+
+const subTitleStyle: CSSProperties = {
+  margin: 0,
+  fontSize: 16
+};
+
+const headerRowStyle: CSSProperties = {
+  display: "flex",
+  justifyContent: "space-between",
+  gap: 12,
+  alignItems: "center"
+};
+
+const badgeStyle: CSSProperties = {
+  padding: "6px 10px",
+  borderRadius: 999,
+  background: "#052e16",
+  color: "#86efac",
+  fontSize: 13
+};
+
+const listStyle: CSSProperties = {
+  display: "grid",
+  gap: 12
+};
+
+const itemButtonStyle: CSSProperties = {
+  display: "grid",
+  gap: 8,
+  padding: 16,
+  borderRadius: 16,
+  border: "1px solid #1e293b",
   background: "#020617",
-  border: "1px solid #1f2937",
-  borderRadius: 12,
+  color: "#e2e8f0",
+  textAlign: "left",
+  cursor: "pointer"
+};
+
+const rowStyle: CSSProperties = {
+  display: "flex",
+  justifyContent: "space-between",
+  gap: 12,
+  alignItems: "center"
+};
+
+const itemMetaStyle: CSSProperties = {
+  display: "flex",
+  justifyContent: "space-between",
+  gap: 12,
+  fontSize: 13,
+  color: "#cbd5e1"
+};
+
+const mutedTextStyle: CSSProperties = {
+  color: "#94a3b8",
+  fontSize: 14
+};
+
+const tagStyle: CSSProperties = {
+  padding: "5px 9px",
+  borderRadius: 999,
+  background: "#052e16",
+  color: "#86efac",
+  fontSize: 12
+};
+
+const detailGridStyle: CSSProperties = {
+  display: "grid",
+  gap: 18
+};
+
+const statsGridStyle: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
+  gap: 12
+};
+
+const statCardStyle: CSSProperties = {
+  display: "grid",
+  gap: 6,
+  background: "#020617",
+  border: "1px solid #1e293b",
+  borderRadius: 16,
+  padding: 16
+};
+
+const statValueStyle: CSSProperties = {
+  fontSize: 24
+};
+
+const sectionBlockStyle: CSSProperties = {
+  display: "grid",
+  gap: 12
+};
+
+const subCardStyle: CSSProperties = {
+  display: "grid",
+  gap: 10,
+  background: "#020617",
+  border: "1px solid #1e293b",
+  borderRadius: 16,
   padding: 14
 };
 
-const subtleCardStyle: CSSProperties = {
+const inlineButtonRowStyle: CSSProperties = {
+  display: "flex",
+  gap: 8
+};
+
+const textareaStyle: CSSProperties = {
+  width: "100%",
+  minHeight: 84,
+  borderRadius: 12,
+  border: "1px solid #334155",
   background: "#0f172a",
-  border: "1px solid #1e293b",
-  borderRadius: 10,
-  padding: 10
+  color: "#e2e8f0",
+  padding: 12,
+  resize: "vertical"
 };
 
-const warningCardStyle: CSSProperties = {
-  background: "#2a0b13",
-  border: "1px solid #7f1d1d",
-  borderRadius: 10,
-  padding: 10,
-  color: "#fecdd3"
+const largeTextareaStyle: CSSProperties = {
+  ...textareaStyle,
+  minHeight: 120
 };
 
-const scoreBadgeStyle: CSSProperties = {
-  minWidth: 40,
-  textAlign: "center",
-  padding: "4px 10px",
+const chipRowStyle: CSSProperties = {
+  display: "flex",
+  flexWrap: "wrap",
+  gap: 8
+};
+
+const riskChipStyle: CSSProperties = {
+  padding: "7px 10px",
   borderRadius: 999,
-  background: "#0ea5e9",
-  color: "#082f49",
-  fontWeight: 800
+  background: "rgba(239, 68, 68, 0.16)",
+  color: "#fca5a5",
+  fontSize: 13
 };
 
-const approveButtonStyle: CSSProperties = {
-  padding: "10px 14px",
-  borderRadius: 10,
-  border: "none",
+const emptyStyle: CSSProperties = {
+  borderRadius: 16,
+  border: "1px dashed #334155",
+  padding: 18,
+  color: "#94a3b8",
+  textAlign: "center"
+};
+
+const actionRowStyle: CSSProperties = {
+  display: "flex",
+  flexWrap: "wrap",
+  gap: 10
+};
+
+const primaryButtonStyle: CSSProperties = {
+  border: 0,
+  borderRadius: 12,
+  padding: "12px 16px",
   background: "#22c55e",
   color: "#052e16",
   fontWeight: 700,
   cursor: "pointer"
 };
 
-const holdButtonStyle: CSSProperties = {
-  padding: "10px 14px",
-  borderRadius: 10,
-  border: "none",
-  background: "#f59e0b",
-  color: "#451a03",
+const ghostButtonStyle: CSSProperties = {
+  borderRadius: 12,
+  padding: "12px 16px",
+  border: "1px solid #334155",
+  background: "transparent",
+  color: "#e2e8f0",
+  cursor: "pointer"
+};
+
+const dangerButtonStyle: CSSProperties = {
+  border: 0,
+  borderRadius: 12,
+  padding: "12px 16px",
+  background: "#ef4444",
+  color: "#fff",
   fontWeight: 700,
   cursor: "pointer"
 };
 
-const rejectButtonStyle: CSSProperties = {
-  padding: "10px 14px",
-  borderRadius: 10,
-  border: "none",
-  background: "#f43f5e",
-  color: "#4c0519",
-  fontWeight: 700,
-  cursor: "pointer"
-};
+function answerButtonStyle(isActive: boolean): CSSProperties {
+  return {
+    borderRadius: 10,
+    border: `1px solid ${isActive ? "#22c55e" : "#334155"}`,
+    background: isActive ? "rgba(34, 197, 94, 0.16)" : "transparent",
+    color: "#e2e8f0",
+    padding: "8px 10px",
+    cursor: "pointer"
+  };
+}

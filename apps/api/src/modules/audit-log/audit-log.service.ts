@@ -2,6 +2,7 @@ import { Injectable } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
 import { resolve } from "node:path";
 import { readJsonFile, writeJsonFile } from "../../common/json-file-store";
+import { isDatabaseStorageEnabled, isDevSeedEnabled } from "../../common/runtime-flags";
 import { PrismaService } from "../../prisma/prisma.service";
 import { AuditLogItemDto, CreateAuditLogDto } from "./audit-log.types";
 
@@ -50,7 +51,8 @@ function createDefaultAuditLogs(): AuditLogRecord[] {
 @Injectable()
 export class AuditLogService {
   private readonly stateFilePath = resolve(process.cwd(), ".data", "audit-log.json");
-  private readonly databaseEnabled = Boolean(process.env.DATABASE_URL?.trim());
+  private readonly databaseEnabled = isDatabaseStorageEnabled();
+  private readonly devSeedEnabled = isDevSeedEnabled();
   private nextAuditLogId = 4;
   private readonly items: AuditLogRecord[] = createDefaultAuditLogs();
   private seedPromise: Promise<void> | null = null;
@@ -176,7 +178,7 @@ export class AuditLogService {
   }
 
   private async ensureDatabaseSeed() {
-    if (!this.databaseEnabled) {
+    if (!this.databaseEnabled || !this.devSeedEnabled) {
       return;
     }
 

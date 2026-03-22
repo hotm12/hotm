@@ -1,6 +1,7 @@
 import { Injectable } from "@nestjs/common";
 import { resolve } from "node:path";
 import { readJsonFile, writeJsonFile } from "../../common/json-file-store";
+import { isDatabaseStorageEnabled, isDevSeedEnabled } from "../../common/runtime-flags";
 import { PrismaService } from "../../prisma/prisma.service";
 import { AuditLogService } from "../audit-log/audit-log.service";
 import { LeadsService } from "../leads/leads.service";
@@ -24,7 +25,8 @@ type CrmState = {
 @Injectable()
 export class CrmService {
   private readonly stateFilePath = resolve(process.cwd(), ".data", "crm.json");
-  private readonly databaseEnabled = Boolean(process.env.DATABASE_URL?.trim());
+  private readonly databaseEnabled = isDatabaseStorageEnabled();
+  private readonly devSeedEnabled = isDevSeedEnabled();
   private nextReplyId = 2;
   private nextActivityId = 3;
   private seedPromise: Promise<void> | null = null;
@@ -326,7 +328,7 @@ export class CrmService {
   }
 
   private async ensureDatabaseSeed() {
-    if (!this.databaseEnabled) {
+    if (!this.databaseEnabled || !this.devSeedEnabled) {
       return;
     }
 

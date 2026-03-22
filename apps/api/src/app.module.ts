@@ -8,6 +8,7 @@ import { CrmModule } from "./modules/crm/crm.module";
 import { OnboardingModule } from "./modules/onboarding/onboarding.module";
 import { AuditLogModule } from "./modules/audit-log/audit-log.module";
 import { DashboardModule } from "./modules/dashboard/dashboard.module";
+import { DiscoveryModule } from "./modules/discovery/discovery.module";
 import { PrismaModule } from "./prisma/prisma.module";
 
 @Module({
@@ -20,7 +21,8 @@ import { PrismaModule } from "./prisma/prisma.module";
     OutreachModule,
     CrmModule,
     OnboardingModule,
-    DashboardModule
+    DashboardModule,
+    DiscoveryModule
   ],
   controllers: [HealthController]
 })

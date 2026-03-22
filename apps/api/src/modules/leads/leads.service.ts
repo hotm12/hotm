@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from "@nestjs/common";
+import { ConflictException, Injectable, NotFoundException } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
 import { resolve } from "node:path";
 import {
@@ -7,14 +7,23 @@ import {
   ensurePrimaryCampaignSeed
 } from "../../common/dev-seed";
 import { readJsonFile, writeJsonFile } from "../../common/json-file-store";
+import { isDatabaseStorageEnabled, isDevSeedEnabled } from "../../common/runtime-flags";
 import { PrismaService } from "../../prisma/prisma.service";
+import { AuditLogService } from "../audit-log/audit-log.service";
 import {
   CreateLeadDto,
+  CreateLeadContactDto,
+  CreateLeadPostDto,
+  ImportLeadsCsvDto,
+  ImportLeadsCsvPreviewResultDto,
+  ImportLeadsCsvResultDto,
   LeadDetailDto,
+  LeadImportHistoryItemDto,
   LeadListQueryDto,
   LeadScoreDto,
   LeadSummaryDto,
-  ReviewChecklistAnswerDto
+  ReviewChecklistAnswerDto,
+  UpdateLeadDto
 } from "./leads.types";
 
 type LeadRecord = Omit<LeadDetailDto, "score" | "totalScore" | "scoreGrade">;
@@ -23,6 +32,23 @@ type LeadState = {
   nextContactId: number;
   nextReviewAnswerId: number;
   leads: LeadRecord[];
+};
+
+type ImportCandidate = {
+  campaignId: number;
+  platform: string;
+  handle?: string;
+  displayName?: string;
+  category?: string;
+  followerCount?: number;
+  postCount?: number;
+  bio?: string;
+  contactValue?: string;
+};
+
+type LeadImportHistoryState = {
+  nextImportHistoryId: number;
+  items: LeadImportHistoryItemDto[];
 };
 
 const leadDetailArgs = Prisma.validator<Prisma.LeadDefaultArgs>()({
@@ -69,16 +95,29 @@ type LeadDbRecord = Prisma.LeadGetPayload<typeof leadDetailArgs>;
 @Injectable()
 export class LeadsService {
   private readonly stateFilePath = resolve(process.cwd(), ".data", "leads.json");
-  private readonly databaseEnabled = Boolean(process.env.DATABASE_URL?.trim());
+  private readonly importHistoryFilePath = resolve(
+    process.cwd(),
+    ".data",
+    "lead-import-history.json"
+  );
+  private readonly databaseEnabled = isDatabaseStorageEnabled();
+  private readonly devSeedEnabled = isDevSeedEnabled();
   private nextLeadId = 4;
   private nextContactId = 5;
   private nextReviewAnswerId = 8;
+  private nextImportHistoryId = 1;
   private readonly leads: LeadRecord[] = createDefaultLeadSeeds();
+  private readonly importHistory: LeadImportHistoryItemDto[] = [];
   private seedPromise: Promise<void> | null = null;
+  private readonly allowedPlatforms = new Set(["INSTAGRAM", "TIKTOK", "YOUTUBE"]);
 
-  constructor(private readonly prisma: PrismaService) {
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly auditLogService: AuditLogService
+  ) {
     if (!this.databaseEnabled) {
       this.loadState();
+      this.loadImportHistoryState();
     }
   }
 
@@ -111,18 +150,21 @@ export class LeadsService {
 
   async create(payload: CreateLeadDto): Promise<LeadDetailDto> {
     const contactValue = payload.contactValue?.trim();
+    const handle = payload.handle.trim();
+    const displayName = payload.displayName.trim();
 
     if (this.databaseEnabled) {
       await this.ensureDatabaseSeed();
       await this.requireCampaign(payload.campaignId);
+      await this.ensureLeadDoesNotExist(payload.campaignId, handle, contactValue);
 
       const lead = await this.prisma.lead.create({
         ...leadDetailArgs,
         data: {
           campaignId: BigInt(payload.campaignId),
           platform: payload.platform,
-          handle: payload.handle,
-          displayName: payload.displayName,
+          handle,
+          displayName,
           category: payload.category,
           followerCount: payload.followerCount,
           postCount: payload.postCount,
@@ -146,12 +188,14 @@ export class LeadsService {
       return this.toDetailFromDb(lead);
     }
 
+    this.ensureStateLeadDoesNotExist(payload.campaignId, handle, contactValue);
+
     const record: LeadRecord = {
       id: this.nextLeadId++,
       campaignId: payload.campaignId,
       platform: payload.platform,
-      handle: payload.handle,
-      displayName: payload.displayName,
+      handle,
+      displayName,
       category: payload.category,
       followerCount: payload.followerCount,
       postCount: payload.postCount,
@@ -190,6 +234,470 @@ export class LeadsService {
     this.leads.unshift(record);
     this.saveState();
     return this.toDetailFromState(record);
+  }
+
+  async addContact(id: number, payload: CreateLeadContactDto): Promise<LeadDetailDto> {
+    const contactType = payload.contactType.trim().toUpperCase();
+    const contactValue = payload.contactValue.trim();
+
+    if (!contactType || !contactValue) {
+      throw new ConflictException("contactType and contactValue are required.");
+    }
+
+    if (contactType === "EMAIL" && !this.isValidEmail(contactValue)) {
+      throw new ConflictException("Primary email format is invalid.");
+    }
+
+    if (this.databaseEnabled) {
+      await this.ensureDatabaseSeed();
+      await this.prisma.contact.create({
+        data: {
+          leadId: BigInt(id),
+          contactType,
+          contactValue,
+          isPrimary: payload.isPrimary ?? false
+        }
+      });
+
+      const detail = this.toDetailFromDb(await this.requireLeadRecord(id));
+      await this.auditLogService.log({
+        entityType: "LEAD",
+        entityId: id,
+        actionType: "LEAD_CONTACT_ADDED",
+        actor: payload.actor,
+        summary: "Lead contact added",
+        detail: `${contactType} contact was added to ${detail.displayName}.`
+      });
+      return detail;
+    }
+
+    const lead = this.requireLeadFromState(id);
+    lead.contacts.push({
+      id: this.nextContactId++,
+      contactType,
+      contactValue,
+      isPrimary: payload.isPrimary ?? false
+    });
+    this.saveState();
+    const detail = this.toDetailFromState(lead);
+    await this.auditLogService.log({
+      entityType: "LEAD",
+      entityId: id,
+      actionType: "LEAD_CONTACT_ADDED",
+      actor: payload.actor,
+      summary: "Lead contact added",
+      detail: `${contactType} contact was added to ${detail.displayName}.`
+    });
+    return detail;
+  }
+
+  async removeContact(id: number, contactId: number, actor?: string): Promise<LeadDetailDto> {
+    if (this.databaseEnabled) {
+      await this.ensureDatabaseSeed();
+      await this.prisma.contact.delete({
+        where: {
+          id: BigInt(contactId)
+        }
+      });
+
+      const detail = this.toDetailFromDb(await this.requireLeadRecord(id));
+      await this.auditLogService.log({
+        entityType: "LEAD",
+        entityId: id,
+        actionType: "LEAD_CONTACT_REMOVED",
+        actor,
+        summary: "Lead contact removed",
+        detail: `A contact was removed from ${detail.displayName}.`
+      });
+      return detail;
+    }
+
+    const lead = this.requireLeadFromState(id);
+    const contactIndex = lead.contacts.findIndex((contact) => contact.id === contactId);
+
+    if (contactIndex < 0) {
+      throw new NotFoundException(`Contact ${contactId} not found`);
+    }
+
+    lead.contacts.splice(contactIndex, 1);
+    this.saveState();
+    const detail = this.toDetailFromState(lead);
+    await this.auditLogService.log({
+      entityType: "LEAD",
+      entityId: id,
+      actionType: "LEAD_CONTACT_REMOVED",
+      actor,
+      summary: "Lead contact removed",
+      detail: `A contact was removed from ${detail.displayName}.`
+    });
+    return detail;
+  }
+
+  async addPost(id: number, payload: CreateLeadPostDto): Promise<LeadDetailDto> {
+    const postUrl = payload.postUrl.trim();
+
+    if (!postUrl) {
+      throw new ConflictException("postUrl is required.");
+    }
+
+    if (this.databaseEnabled) {
+      await this.ensureDatabaseSeed();
+      await this.prisma.leadPost.create({
+        data: {
+          leadId: BigInt(id),
+          postUrl,
+          caption: payload.caption?.trim() || null,
+          postedAt: payload.postedAt ? new Date(payload.postedAt) : null,
+          metadata: {}
+        }
+      });
+
+      const detail = this.toDetailFromDb(await this.requireLeadRecord(id));
+      await this.auditLogService.log({
+        entityType: "LEAD",
+        entityId: id,
+        actionType: "LEAD_POST_ADDED",
+        actor: payload.actor,
+        summary: "Lead post added",
+        detail: `${detail.displayName} received a new tracked post.`
+      });
+      return detail;
+    }
+
+    const lead = this.requireLeadFromState(id);
+    lead.posts.push({
+      id: Date.now(),
+      postUrl,
+      caption: payload.caption?.trim() ?? "",
+      postedAt: payload.postedAt ?? new Date().toISOString()
+    });
+    if (!lead.postCount) {
+      lead.postCount = 1;
+    } else {
+      lead.postCount += 1;
+    }
+    this.saveState();
+    const detail = this.toDetailFromState(lead);
+    await this.auditLogService.log({
+      entityType: "LEAD",
+      entityId: id,
+      actionType: "LEAD_POST_ADDED",
+      actor: payload.actor,
+      summary: "Lead post added",
+      detail: `${detail.displayName} received a new tracked post.`
+    });
+    return detail;
+  }
+
+  async update(id: number, payload: UpdateLeadDto): Promise<LeadDetailDto> {
+    if (this.databaseEnabled) {
+      await this.ensureDatabaseSeed();
+      const currentLead = await this.requireLeadRecord(id);
+      const currentEmailContact = currentLead.contacts.find(
+        (contact) => contact.contactType === "EMAIL"
+      );
+      const nextCampaignId = payload.campaignId ?? this.toNumber(currentLead.campaignId);
+      const nextHandle = payload.handle?.trim() ?? currentLead.handle;
+      const nextContactValue =
+        payload.contactValue !== undefined
+          ? payload.contactValue.trim() || undefined
+          : currentEmailContact?.contactValue ?? undefined;
+
+      await this.requireCampaign(nextCampaignId);
+      await this.ensureLeadDoesNotExistForUpdate(
+        id,
+        nextCampaignId,
+        nextHandle,
+        nextContactValue
+      );
+
+      const updatedLead = await this.prisma.lead.update({
+        ...leadDetailArgs,
+        where: {
+          id: BigInt(id)
+        },
+        data: {
+          campaignId: BigInt(nextCampaignId),
+          platform: payload.platform ?? currentLead.platform,
+          handle: nextHandle,
+          displayName: payload.displayName?.trim() ?? currentLead.displayName,
+          category: payload.category !== undefined ? payload.category || null : currentLead.category,
+          followerCount:
+            payload.followerCount !== undefined
+              ? payload.followerCount
+              : currentLead.followerCount,
+          postCount:
+            payload.postCount !== undefined ? payload.postCount : currentLead.postCount,
+          bio: payload.bio !== undefined ? payload.bio || null : currentLead.bio,
+          leadStatus: payload.leadStatus ?? currentLead.leadStatus,
+          crmStage:
+            payload.crmStage !== undefined ? payload.crmStage || null : currentLead.crmStage,
+          reviewNotes:
+            payload.reviewNotes !== undefined
+              ? payload.reviewNotes || null
+              : currentLead.reviewNotes
+        }
+      });
+
+      if (payload.contactValue !== undefined) {
+        if (nextContactValue) {
+          if (currentEmailContact) {
+            await this.prisma.contact.update({
+              where: {
+                id: currentEmailContact.id
+              },
+              data: {
+                contactValue: nextContactValue,
+                isPrimary: true
+              }
+            });
+          } else {
+            await this.prisma.contact.create({
+              data: {
+                leadId: BigInt(id),
+                contactType: "EMAIL",
+                contactValue: nextContactValue,
+                isPrimary: true
+              }
+            });
+          }
+        } else if (currentEmailContact) {
+          await this.prisma.contact.delete({
+            where: {
+              id: currentEmailContact.id
+            }
+          });
+        }
+      }
+
+      const detail = this.toDetailFromDb(await this.requireLeadRecord(id));
+      await this.auditLogService.log({
+        entityType: "LEAD",
+        entityId: id,
+        actionType: "LEAD_UPDATED",
+        actor: payload.actor,
+        summary: "Lead updated",
+        detail: `${detail.displayName} lead profile was updated.`,
+        beforeData: this.toDetailFromDb(currentLead),
+        afterData: detail
+      });
+      return detail;
+    }
+
+    const lead = this.requireLeadFromState(id);
+    const currentEmailContact = lead.contacts.find((contact) => contact.contactType === "EMAIL");
+    const nextCampaignId = payload.campaignId ?? lead.campaignId;
+    const nextHandle = payload.handle?.trim() ?? lead.handle;
+    const nextContactValue =
+      payload.contactValue !== undefined
+        ? payload.contactValue.trim() || undefined
+        : currentEmailContact?.contactValue ?? undefined;
+
+    this.ensureStateLeadDoesNotExistForUpdate(id, nextCampaignId, nextHandle, nextContactValue);
+    const before = this.toDetailFromState(lead);
+
+    lead.campaignId = nextCampaignId;
+    lead.platform = payload.platform ?? lead.platform;
+    lead.handle = nextHandle;
+    lead.displayName = payload.displayName?.trim() ?? lead.displayName;
+    lead.category = payload.category !== undefined ? payload.category || undefined : lead.category;
+    lead.followerCount =
+      payload.followerCount !== undefined ? payload.followerCount : lead.followerCount;
+    lead.postCount = payload.postCount !== undefined ? payload.postCount : lead.postCount;
+    lead.bio = payload.bio !== undefined ? payload.bio || undefined : lead.bio;
+    lead.leadStatus = payload.leadStatus ?? lead.leadStatus;
+    lead.crmStage = payload.crmStage !== undefined ? payload.crmStage || undefined : lead.crmStage;
+    lead.reviewNotes =
+      payload.reviewNotes !== undefined ? payload.reviewNotes || undefined : lead.reviewNotes;
+
+    if (payload.contactValue !== undefined) {
+      if (nextContactValue) {
+        if (currentEmailContact) {
+          currentEmailContact.contactValue = nextContactValue;
+          currentEmailContact.isPrimary = true;
+        } else {
+          lead.contacts.unshift({
+            id: this.nextContactId++,
+            contactType: "EMAIL",
+            contactValue: nextContactValue,
+            isPrimary: true
+          });
+        }
+      } else if (currentEmailContact) {
+        lead.contacts.splice(lead.contacts.indexOf(currentEmailContact), 1);
+      }
+    }
+
+    this.saveState();
+    const detail = this.toDetailFromState(lead);
+    await this.auditLogService.log({
+      entityType: "LEAD",
+      entityId: id,
+      actionType: "LEAD_UPDATED",
+      actor: payload.actor,
+      summary: "Lead updated",
+      detail: `${detail.displayName} lead profile was updated.`,
+      beforeData: before,
+      afterData: detail
+    });
+    return detail;
+  }
+
+  async listImportHistory(limit = 20): Promise<LeadImportHistoryItemDto[]> {
+    if (this.databaseEnabled) {
+      const logs = await this.prisma.auditLog.findMany({
+        where: {
+          actionType: "LEAD_IMPORT_COMPLETED"
+        },
+        orderBy: {
+          createdAt: "desc"
+        },
+        take: limit
+      });
+
+      return logs.map((log) => {
+        const afterData = this.toJsonObject(log.afterData);
+        return {
+          id: Number(log.id),
+          fileName: this.readJsonString(afterData, "fileName"),
+          templateName: this.readJsonString(afterData, "templateName"),
+          campaignId: this.readJsonNumber(afterData, "campaignId"),
+          platform: this.readJsonString(afterData, "platform"),
+          importedCount: this.readJsonNumber(afterData, "importedCount") ?? 0,
+          skippedCount: this.readJsonNumber(afterData, "skippedCount") ?? 0,
+          overwriteCount: this.readJsonNumber(afterData, "overwriteCount") ?? 0,
+          mergeCount: this.readJsonNumber(afterData, "mergeCount") ?? 0,
+          createdAt: log.createdAt.toISOString()
+        };
+      });
+    }
+
+    return [...this.importHistory]
+      .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))
+      .slice(0, limit);
+  }
+
+  async importCsv(payload: ImportLeadsCsvDto): Promise<ImportLeadsCsvResultDto> {
+    const rows = this.parseCsvRows(payload.csvText);
+    const imported: LeadDetailDto[] = [];
+    const skipped: ImportLeadsCsvResultDto["skipped"] = [];
+    const seenHandles = new Set<string>();
+    const seenContacts = new Set<string>();
+    let overwriteCount = 0;
+    let mergeCount = 0;
+
+    for (const [index, row] of rows.entries()) {
+      const candidate = this.buildImportCandidate(row, payload);
+      const reason = await this.findImportSkipReason(candidate, seenHandles, seenContacts);
+      const requestedAction = this.getRequestedImportAction(payload, index + 2);
+
+      if (reason) {
+        if (requestedAction === "OVERWRITE" && this.canOverwriteReason(reason)) {
+          imported.push(await this.overwriteImportedLead(candidate));
+          overwriteCount += 1;
+          continue;
+        }
+
+        if (requestedAction === "MERGE" && this.canMergeReason(reason)) {
+          imported.push(await this.mergeImportedLead(candidate));
+          mergeCount += 1;
+          continue;
+        }
+
+        skipped.push({
+          rowNumber: index + 2,
+          reason,
+          handle: candidate.handle,
+          contactValue: candidate.contactValue
+        });
+        continue;
+      }
+
+      try {
+        imported.push(
+          await this.create({
+            campaignId: candidate.campaignId,
+            platform: candidate.platform,
+            handle: candidate.handle!,
+            displayName: candidate.displayName!,
+            category: candidate.category,
+            followerCount: candidate.followerCount,
+            postCount: candidate.postCount,
+            bio: candidate.bio,
+            contactValue: candidate.contactValue
+          })
+        );
+      } catch (error) {
+        skipped.push({
+          rowNumber: index + 2,
+          reason: error instanceof Error ? error.message : "Failed to import row.",
+          handle: candidate.handle,
+          contactValue: candidate.contactValue
+        });
+      }
+    }
+
+    await this.recordImportHistory(payload, {
+      importedCount: imported.length,
+      skippedCount: skipped.length,
+      overwriteCount,
+      mergeCount
+    });
+
+    return {
+      imported,
+      skipped
+    };
+  }
+
+  async previewImportCsv(
+    payload: ImportLeadsCsvDto
+  ): Promise<ImportLeadsCsvPreviewResultDto> {
+    const rows = this.parseCsvRows(payload.csvText);
+    const previewRows: ImportLeadsCsvPreviewResultDto["rows"] = [];
+    const seenHandles = new Set<string>();
+    const seenContacts = new Set<string>();
+
+    for (const [index, row] of rows.entries()) {
+      const candidate = this.buildImportCandidate(row, payload);
+      const reason = await this.findImportSkipReason(candidate, seenHandles, seenContacts);
+      const requestedAction = this.getRequestedImportAction(payload, index + 2);
+      const canOverwrite = reason ? this.canOverwriteReason(reason) : false;
+      const canMerge = reason ? this.canMergeReason(reason) : false;
+
+      previewRows.push({
+        rowNumber: index + 2,
+        campaignId: candidate.campaignId,
+        platform: candidate.platform,
+        handle: candidate.handle,
+        displayName: candidate.displayName,
+        category: candidate.category,
+        followerCount: candidate.followerCount,
+        postCount: candidate.postCount,
+        bio: candidate.bio,
+        contactValue: candidate.contactValue,
+        status:
+          reason &&
+          !(
+            (requestedAction === "OVERWRITE" && canOverwrite) ||
+            (requestedAction === "MERGE" && canMerge)
+          )
+            ? "SKIP"
+            : "READY",
+        reason:
+          requestedAction === "OVERWRITE" && canOverwrite
+            ? "Will overwrite existing lead."
+            : requestedAction === "MERGE" && canMerge
+              ? "Will merge into existing lead."
+              : reason ?? undefined
+      });
+    }
+
+    return {
+      rows: previewRows,
+      readyCount: previewRows.filter((row) => row.status === "READY").length,
+      skipCount: previewRows.filter((row) => row.status === "SKIP").length
+    };
   }
 
   async recalculateScore(id: number): Promise<LeadScoreDto> {
@@ -693,7 +1201,7 @@ export class LeadsService {
   }
 
   private async ensureDatabaseSeed() {
-    if (!this.databaseEnabled) {
+    if (!this.databaseEnabled || !this.devSeedEnabled) {
       return;
     }
 
@@ -769,6 +1277,668 @@ export class LeadsService {
     await this.seedPromise;
   }
 
+  private parseCsvRows(csvText: string) {
+    const rows = this.parseCsv(csvText.trim()).filter((row) =>
+      row.some((value) => value.trim().length > 0)
+    );
+
+    if (rows.length < 2) {
+      return [];
+    }
+
+    const headers = rows[0].map((value) => this.normalizeHeader(value));
+
+    return rows.slice(1).map((row) => {
+      const record = new Map<string, string>();
+
+      headers.forEach((header, index) => {
+        if (!header) {
+          return;
+        }
+
+        record.set(header, row[index]?.trim() ?? "");
+      });
+
+      return record;
+    });
+  }
+
+  private buildImportCandidate(
+    row: Map<string, string>,
+    payload: ImportLeadsCsvDto
+  ): ImportCandidate {
+    return {
+      campaignId: this.readInteger(row, "campaignid") ?? payload.campaignId ?? 1,
+      platform: (this.readString(row, "platform") ?? payload.platform ?? "INSTAGRAM").toUpperCase(),
+      handle: this.readString(row, "handle"),
+      displayName:
+        this.readString(row, "displayname") ??
+        this.readString(row, "name") ??
+        this.readString(row, "sellername"),
+      category: this.readString(row, "category"),
+      followerCount: this.readInteger(row, "followercount"),
+      postCount: this.readInteger(row, "postcount"),
+      bio: this.readString(row, "bio"),
+      contactValue:
+        this.readString(row, "contactvalue") ??
+        this.readString(row, "email") ??
+        this.readString(row, "contact")
+    };
+  }
+
+  private async findImportSkipReason(
+    candidate: ImportCandidate,
+    seenHandles: Set<string>,
+    seenContacts: Set<string>
+  ) {
+    const validationReason = this.validateImportCandidate(candidate);
+
+    if (validationReason) {
+      return validationReason;
+    }
+
+    const handleKey = this.toImportKey(candidate.campaignId, candidate.handle!);
+    if (seenHandles.has(handleKey)) {
+      return `Duplicate handle in upload: ${candidate.handle}`;
+    }
+
+    const contactKey = candidate.contactValue
+      ? this.toImportKey(candidate.campaignId, candidate.contactValue)
+      : null;
+
+    if (contactKey && seenContacts.has(contactKey)) {
+      return `Duplicate contactValue in upload: ${candidate.contactValue}`;
+    }
+
+    try {
+      if (this.databaseEnabled) {
+        await this.ensureDatabaseSeed();
+        await this.ensureLeadDoesNotExist(
+          candidate.campaignId,
+          candidate.handle!,
+          candidate.contactValue
+        );
+      } else {
+        this.ensureStateLeadDoesNotExist(
+          candidate.campaignId,
+          candidate.handle!,
+          candidate.contactValue
+        );
+      }
+    } catch (error) {
+      return error instanceof Error ? error.message : "Duplicate or invalid row.";
+    }
+
+    seenHandles.add(handleKey);
+    if (contactKey) {
+      seenContacts.add(contactKey);
+    }
+
+    return null;
+  }
+
+  private validateImportCandidate(candidate: ImportCandidate) {
+    if (!candidate.handle || !candidate.displayName) {
+      return "Missing required handle or displayName.";
+    }
+
+    if (candidate.campaignId < 1) {
+      return "campaignId must be a positive number.";
+    }
+
+    if (!this.allowedPlatforms.has(candidate.platform)) {
+      return `Unsupported platform: ${candidate.platform}.`;
+    }
+
+    if (
+      candidate.followerCount !== undefined &&
+      (candidate.followerCount < 0 || candidate.followerCount > 50_000_000)
+    ) {
+      return "followerCount is outside the allowed range.";
+    }
+
+    if (
+      candidate.postCount !== undefined &&
+      (candidate.postCount < 0 || candidate.postCount > 1_000_000)
+    ) {
+      return "postCount is outside the allowed range.";
+    }
+
+    if (candidate.contactValue && !this.isValidEmail(candidate.contactValue)) {
+      return `Invalid email format: ${candidate.contactValue}`;
+    }
+
+    return null;
+  }
+
+  private parseCsv(csvText: string) {
+    const rows: string[][] = [];
+    let currentRow: string[] = [];
+    let currentValue = "";
+    let insideQuotes = false;
+
+    for (let index = 0; index < csvText.length; index += 1) {
+      const character = csvText[index];
+      const nextCharacter = csvText[index + 1];
+
+      if (character === '"') {
+        if (insideQuotes && nextCharacter === '"') {
+          currentValue += '"';
+          index += 1;
+        } else {
+          insideQuotes = !insideQuotes;
+        }
+
+        continue;
+      }
+
+      if (!insideQuotes && character === ",") {
+        currentRow.push(currentValue);
+        currentValue = "";
+        continue;
+      }
+
+      if (!insideQuotes && (character === "\n" || character === "\r")) {
+        if (character === "\r" && nextCharacter === "\n") {
+          index += 1;
+        }
+
+        currentRow.push(currentValue);
+        rows.push(currentRow);
+        currentRow = [];
+        currentValue = "";
+        continue;
+      }
+
+      currentValue += character;
+    }
+
+    if (currentValue.length > 0 || currentRow.length > 0) {
+      currentRow.push(currentValue);
+      rows.push(currentRow);
+    }
+
+    return rows;
+  }
+
+  private normalizeHeader(value: string) {
+    return value.trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+  }
+
+  private toImportKey(campaignId: number, value: string) {
+    return `${campaignId}:${value.trim().toLowerCase()}`;
+  }
+
+  private readString(row: Map<string, string>, key: string) {
+    const value = row.get(key)?.trim();
+    return value ? value : undefined;
+  }
+
+  private readInteger(row: Map<string, string>, key: string) {
+    const value = row.get(key)?.trim();
+
+    if (!value) {
+      return undefined;
+    }
+
+    const parsed = Number(value.replace(/,/g, ""));
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+
+  private isValidEmail(value: string) {
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
+  }
+
+  private getRequestedImportAction(payload: ImportLeadsCsvDto, rowNumber: number) {
+    return payload.actions?.find((item) => item.rowNumber === rowNumber)?.action ?? "SKIP";
+  }
+
+  private canOverwriteReason(reason: string) {
+    return (
+      reason.startsWith("Duplicate handle:") || reason.startsWith("Duplicate contactValue:")
+    );
+  }
+
+  private canMergeReason(reason: string) {
+    return this.canOverwriteReason(reason);
+  }
+
+  private async overwriteImportedLead(candidate: ImportCandidate) {
+    if (!candidate.handle || !candidate.displayName) {
+      throw new ConflictException("Cannot overwrite without handle and displayName.");
+    }
+
+    if (this.databaseEnabled) {
+      await this.ensureDatabaseSeed();
+      const existing = await this.findDatabaseDuplicateLead(
+        candidate.campaignId,
+        candidate.handle,
+        candidate.contactValue
+      );
+
+      if (!existing) {
+        throw new NotFoundException("No duplicate lead found for overwrite.");
+      }
+
+      await this.prisma.lead.update({
+        where: {
+          id: existing.id
+        },
+        data: {
+          platform: candidate.platform,
+          handle: candidate.handle,
+          displayName: candidate.displayName,
+          category: candidate.category,
+          followerCount: candidate.followerCount,
+          postCount: candidate.postCount,
+          bio: candidate.bio
+        }
+      });
+
+      if (candidate.contactValue) {
+        const existingContact = await this.prisma.contact.findFirst({
+          where: {
+            leadId: existing.id,
+            contactType: "EMAIL"
+          },
+          orderBy: {
+            id: "asc"
+          }
+        });
+
+        if (existingContact) {
+          await this.prisma.contact.update({
+            where: {
+              id: existingContact.id
+            },
+            data: {
+              contactValue: candidate.contactValue,
+              isPrimary: true
+            }
+          });
+        } else {
+          await this.prisma.contact.create({
+            data: {
+              leadId: existing.id,
+              contactType: "EMAIL",
+              contactValue: candidate.contactValue,
+              isPrimary: true
+            }
+          });
+        }
+      }
+
+      return this.toDetailFromDb(await this.requireLeadRecord(Number(existing.id)));
+    }
+
+    const existing = this.findStateDuplicateLead(
+      candidate.campaignId,
+      candidate.handle,
+      candidate.contactValue
+    );
+
+    if (!existing) {
+      throw new NotFoundException("No duplicate lead found for overwrite.");
+    }
+
+    existing.platform = candidate.platform;
+    existing.handle = candidate.handle;
+    existing.displayName = candidate.displayName;
+    existing.category = candidate.category;
+    existing.followerCount = candidate.followerCount;
+    existing.postCount = candidate.postCount;
+    existing.bio = candidate.bio;
+
+    if (candidate.contactValue) {
+      const existingContact = existing.contacts.find((contact) => contact.contactType === "EMAIL");
+
+      if (existingContact) {
+        existingContact.contactValue = candidate.contactValue;
+        existingContact.isPrimary = true;
+      } else {
+        existing.contacts.unshift({
+          id: this.nextContactId++,
+          contactType: "EMAIL",
+          contactValue: candidate.contactValue,
+          isPrimary: true
+        });
+      }
+    }
+
+    this.saveState();
+    return this.toDetailFromState(existing);
+  }
+
+  private async mergeImportedLead(candidate: ImportCandidate) {
+    if (!candidate.handle || !candidate.displayName) {
+      throw new ConflictException("Cannot merge without handle and displayName.");
+    }
+
+    if (this.databaseEnabled) {
+      await this.ensureDatabaseSeed();
+      const existing = await this.findDatabaseDuplicateLead(
+        candidate.campaignId,
+        candidate.handle,
+        candidate.contactValue
+      );
+
+      if (!existing) {
+        throw new NotFoundException("No duplicate lead found for merge.");
+      }
+
+      const existingLead = await this.requireLeadRecord(Number(existing.id));
+      const mergedLead = this.buildMergedLeadData(existingLead, candidate);
+
+      await this.prisma.lead.update({
+        where: {
+          id: existing.id
+        },
+        data: mergedLead
+      });
+
+      if (candidate.contactValue) {
+        const existingContact = await this.prisma.contact.findFirst({
+          where: {
+            leadId: existing.id,
+            contactType: "EMAIL"
+          },
+          orderBy: {
+            id: "asc"
+          }
+        });
+
+        if (!existingContact) {
+          await this.prisma.contact.create({
+            data: {
+              leadId: existing.id,
+              contactType: "EMAIL",
+              contactValue: candidate.contactValue,
+              isPrimary: true
+            }
+          });
+        }
+      }
+
+      return this.toDetailFromDb(await this.requireLeadRecord(Number(existing.id)));
+    }
+
+    const existing = this.findStateDuplicateLead(
+      candidate.campaignId,
+      candidate.handle,
+      candidate.contactValue
+    );
+
+    if (!existing) {
+      throw new NotFoundException("No duplicate lead found for merge.");
+    }
+
+    existing.platform = existing.platform || candidate.platform;
+    existing.handle = existing.handle || candidate.handle;
+    existing.displayName = existing.displayName || candidate.displayName;
+    existing.category = existing.category || candidate.category;
+    existing.followerCount = existing.followerCount ?? candidate.followerCount;
+    existing.postCount = existing.postCount ?? candidate.postCount;
+    existing.bio = existing.bio || candidate.bio;
+
+    if (candidate.contactValue) {
+      const existingContact = existing.contacts.find((contact) => contact.contactType === "EMAIL");
+
+      if (!existingContact) {
+        existing.contacts.unshift({
+          id: this.nextContactId++,
+          contactType: "EMAIL",
+          contactValue: candidate.contactValue,
+          isPrimary: true
+        });
+      }
+    }
+
+    this.saveState();
+    return this.toDetailFromState(existing);
+  }
+
+  private async findDatabaseDuplicateLead(
+    campaignId: number,
+    handle: string,
+    contactValue?: string
+  ) {
+    const existingByHandle = await this.prisma.lead.findFirst({
+      where: {
+        campaignId: BigInt(campaignId),
+        handle: {
+          equals: handle,
+          mode: "insensitive"
+        }
+      }
+    });
+
+    if (existingByHandle) {
+      return existingByHandle;
+    }
+
+    if (!contactValue) {
+      return null;
+    }
+
+    return this.prisma.lead.findFirst({
+      where: {
+        campaignId: BigInt(campaignId),
+        contacts: {
+          some: {
+            contactValue: {
+              equals: contactValue,
+              mode: "insensitive"
+            }
+          }
+        }
+      }
+    });
+  }
+
+  private findStateDuplicateLead(
+    campaignId: number,
+    handle: string,
+    contactValue?: string
+  ) {
+    const normalizedHandle = handle.trim().toLowerCase();
+    const existingByHandle = this.leads.find(
+      (lead) =>
+        lead.campaignId === campaignId && lead.handle.trim().toLowerCase() === normalizedHandle
+    );
+
+    if (existingByHandle) {
+      return existingByHandle;
+    }
+
+    if (!contactValue) {
+      return null;
+    }
+
+    const normalizedContact = contactValue.trim().toLowerCase();
+    return this.leads.find(
+      (lead) =>
+        lead.campaignId === campaignId &&
+        lead.contacts.some(
+          (contact) => contact.contactValue.trim().toLowerCase() === normalizedContact
+        )
+    );
+  }
+
+  private buildMergedLeadData(lead: LeadDbRecord, candidate: ImportCandidate) {
+    return {
+      platform: lead.platform || candidate.platform,
+      handle: lead.handle || candidate.handle,
+      displayName: lead.displayName || candidate.displayName,
+      category: lead.category ?? candidate.category,
+      followerCount: lead.followerCount ?? candidate.followerCount,
+      postCount: lead.postCount ?? candidate.postCount,
+      bio: lead.bio ?? candidate.bio
+    };
+  }
+
+  private async ensureLeadDoesNotExist(
+    campaignId: number,
+    handle: string,
+    contactValue?: string
+  ) {
+    const existingByHandle = await this.prisma.lead.findFirst({
+      where: {
+        campaignId: BigInt(campaignId),
+        handle: {
+          equals: handle,
+          mode: "insensitive"
+        }
+      }
+    });
+
+    if (existingByHandle) {
+      throw new ConflictException(`Duplicate handle: ${handle}`);
+    }
+
+    if (!contactValue) {
+      return;
+    }
+
+    const existingByContact = await this.prisma.lead.findFirst({
+      where: {
+        campaignId: BigInt(campaignId),
+        contacts: {
+          some: {
+            contactValue: {
+              equals: contactValue,
+              mode: "insensitive"
+            }
+          }
+        }
+      }
+    });
+
+    if (existingByContact) {
+      throw new ConflictException(`Duplicate contactValue: ${contactValue}`);
+    }
+  }
+
+  private async ensureLeadDoesNotExistForUpdate(
+    id: number,
+    campaignId: number,
+    handle: string,
+    contactValue?: string
+  ) {
+    const existingByHandle = await this.prisma.lead.findFirst({
+      where: {
+        id: {
+          not: BigInt(id)
+        },
+        campaignId: BigInt(campaignId),
+        handle: {
+          equals: handle,
+          mode: "insensitive"
+        }
+      }
+    });
+
+    if (existingByHandle) {
+      throw new ConflictException(`Duplicate handle: ${handle}`);
+    }
+
+    if (!contactValue) {
+      return;
+    }
+
+    const existingByContact = await this.prisma.lead.findFirst({
+      where: {
+        id: {
+          not: BigInt(id)
+        },
+        campaignId: BigInt(campaignId),
+        contacts: {
+          some: {
+            contactValue: {
+              equals: contactValue,
+              mode: "insensitive"
+            }
+          }
+        }
+      }
+    });
+
+    if (existingByContact) {
+      throw new ConflictException(`Duplicate contactValue: ${contactValue}`);
+    }
+  }
+
+  private ensureStateLeadDoesNotExist(
+    campaignId: number,
+    handle: string,
+    contactValue?: string
+  ) {
+    const normalizedHandle = handle.trim().toLowerCase();
+    const normalizedContact = contactValue?.trim().toLowerCase();
+
+    const existingByHandle = this.leads.find(
+      (lead) =>
+        lead.campaignId === campaignId && lead.handle.trim().toLowerCase() === normalizedHandle
+    );
+
+    if (existingByHandle) {
+      throw new ConflictException(`Duplicate handle: ${handle}`);
+    }
+
+    if (!normalizedContact) {
+      return;
+    }
+
+    const existingByContact = this.leads.find(
+      (lead) =>
+        lead.campaignId === campaignId &&
+        lead.contacts.some(
+          (contact) => contact.contactValue.trim().toLowerCase() === normalizedContact
+        )
+    );
+
+    if (existingByContact) {
+      throw new ConflictException(`Duplicate contactValue: ${contactValue}`);
+    }
+  }
+
+  private ensureStateLeadDoesNotExistForUpdate(
+    id: number,
+    campaignId: number,
+    handle: string,
+    contactValue?: string
+  ) {
+    const normalizedHandle = handle.trim().toLowerCase();
+    const normalizedContact = contactValue?.trim().toLowerCase();
+
+    const existingByHandle = this.leads.find(
+      (lead) =>
+        lead.id !== id &&
+        lead.campaignId === campaignId &&
+        lead.handle.trim().toLowerCase() === normalizedHandle
+    );
+
+    if (existingByHandle) {
+      throw new ConflictException(`Duplicate handle: ${handle}`);
+    }
+
+    if (!normalizedContact) {
+      return;
+    }
+
+    const existingByContact = this.leads.find(
+      (lead) =>
+        lead.id !== id &&
+        lead.campaignId === campaignId &&
+        lead.contacts.some(
+          (contact) => contact.contactValue.trim().toLowerCase() === normalizedContact
+        )
+    );
+
+    if (existingByContact) {
+      throw new ConflictException(`Duplicate contactValue: ${contactValue}`);
+    }
+  }
+
   private async requireCampaign(id: number) {
     const campaign = await this.prisma.campaign.findUnique({
       where: {
@@ -817,6 +1987,78 @@ export class LeadsService {
     return Number(value);
   }
 
+  private async recordImportHistory(
+    payload: ImportLeadsCsvDto,
+    summary: {
+      importedCount: number;
+      skippedCount: number;
+      overwriteCount: number;
+      mergeCount: number;
+    }
+  ) {
+    const historyItem: Omit<LeadImportHistoryItemDto, "id"> = {
+      fileName: payload.fileName,
+      templateName: payload.templateName,
+      campaignId: payload.campaignId,
+      platform: payload.platform,
+      importedCount: summary.importedCount,
+      skippedCount: summary.skippedCount,
+      overwriteCount: summary.overwriteCount,
+      mergeCount: summary.mergeCount,
+      createdAt: new Date().toISOString()
+    };
+
+    if (!this.databaseEnabled) {
+      this.importHistory.unshift({
+        id: this.nextImportHistoryId++,
+        ...historyItem
+      });
+      this.saveImportHistoryState();
+    }
+
+    await this.auditLogService.log({
+      entityType: "LEAD_IMPORT",
+      entityId: payload.campaignId ?? 0,
+      actionType: "LEAD_IMPORT_COMPLETED",
+      actor: payload.actor,
+      summary: "Lead import completed",
+      detail: `Imported ${summary.importedCount} rows and skipped ${summary.skippedCount} rows.`,
+      afterData: historyItem
+    });
+  }
+
+  private toJsonObject(value: Prisma.JsonValue | null) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return null;
+    }
+
+    return value as Record<string, Prisma.JsonValue>;
+  }
+
+  private readJsonString(
+    value: Record<string, Prisma.JsonValue> | null,
+    key: string
+  ): string | undefined {
+    if (!value) {
+      return undefined;
+    }
+
+    const nextValue = Reflect.get(value, key);
+    return typeof nextValue === "string" ? nextValue : undefined;
+  }
+
+  private readJsonNumber(
+    value: Record<string, Prisma.JsonValue> | null,
+    key: string
+  ): number | undefined {
+    if (!value) {
+      return undefined;
+    }
+
+    const nextValue = Reflect.get(value, key);
+    return typeof nextValue === "number" ? nextValue : undefined;
+  }
+
   private loadState() {
     const state = readJsonFile<LeadState | null>(this.stateFilePath, null);
 
@@ -830,12 +2072,33 @@ export class LeadsService {
     this.leads.splice(0, this.leads.length, ...state.leads);
   }
 
+  private loadImportHistoryState() {
+    const state = readJsonFile<LeadImportHistoryState | null>(
+      this.importHistoryFilePath,
+      null
+    );
+
+    if (!state) {
+      return;
+    }
+
+    this.nextImportHistoryId = state.nextImportHistoryId;
+    this.importHistory.splice(0, this.importHistory.length, ...state.items);
+  }
+
   private saveState() {
     writeJsonFile<LeadState>(this.stateFilePath, {
       nextLeadId: this.nextLeadId,
       nextContactId: this.nextContactId,
       nextReviewAnswerId: this.nextReviewAnswerId,
       leads: this.leads
+    });
+  }
+
+  private saveImportHistoryState() {
+    writeJsonFile<LeadImportHistoryState>(this.importHistoryFilePath, {
+      nextImportHistoryId: this.nextImportHistoryId,
+      items: this.importHistory
     });
   }
 }

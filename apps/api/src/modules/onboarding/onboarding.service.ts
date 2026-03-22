@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from "@nestjs/common";
 import { resolve } from "node:path";
 import { readJsonFile, writeJsonFile } from "../../common/json-file-store";
+import { isDatabaseStorageEnabled, isDevSeedEnabled } from "../../common/runtime-flags";
 import { PrismaService } from "../../prisma/prisma.service";
 import { AuditLogService } from "../audit-log/audit-log.service";
 import { LeadsService } from "../leads/leads.service";
@@ -27,7 +28,8 @@ type OnboardingState = {
 @Injectable()
 export class OnboardingService {
   private readonly stateFilePath = resolve(process.cwd(), ".data", "onboarding.json");
-  private readonly databaseEnabled = Boolean(process.env.DATABASE_URL?.trim());
+  private readonly databaseEnabled = isDatabaseStorageEnabled();
+  private readonly devSeedEnabled = isDevSeedEnabled();
   private seedPromise: Promise<void> | null = null;
 
   private readonly items: OnboardingRecord[] = [
@@ -288,7 +290,7 @@ export class OnboardingService {
   }
 
   private async ensureDatabaseSeed() {
-    if (!this.databaseEnabled) {
+    if (!this.databaseEnabled || !this.devSeedEnabled) {
       return;
     }
 

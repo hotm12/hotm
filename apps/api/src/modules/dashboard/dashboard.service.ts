@@ -1,4 +1,5 @@
 import { Injectable } from "@nestjs/common";
+import { isDatabaseStorageEnabled, isDevSeedEnabled } from "../../common/runtime-flags";
 import { AuditLogService } from "../audit-log/audit-log.service";
 import { CampaignsService } from "../campaigns/campaigns.service";
 import { LeadsService } from "../leads/leads.service";
@@ -87,7 +88,12 @@ export class DashboardService {
         nextAction: item.nextAction,
         updatedAt: item.updatedAt
       })),
-      recentActivity
+      recentActivity,
+      storage: {
+        storageMode: isDatabaseStorageEnabled() ? "DATABASE" : "JSON_FALLBACK",
+        devSeedEnabled: isDevSeedEnabled(),
+        databaseUrlConfigured: Boolean(process.env.DATABASE_URL?.trim())
+      }
     };
   }
 

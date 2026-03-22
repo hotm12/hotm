@@ -28,7 +28,7 @@ const fallbackItems: OnboardingSummary[] = [
     handle: "@kglow_finds",
     platform: "TIKTOK",
     onboardingStatus: "IN_PROGRESS",
-    nextAction: "Request product catalog",
+    nextAction: "상품 카탈로그 요청",
     updatedAt: "2026-03-18T03:10:00Z"
   }
 ];
@@ -36,24 +36,8 @@ const fallbackItems: OnboardingSummary[] = [
 const fallbackDetail: OnboardingDetail = {
   ...fallbackItems[0],
   crmStage: "ONBOARDING",
-  notes: "Seller replied positively. Waiting for listing details.",
+  notes: "셀러가 긍정 답장을 보냈고, 현재 리스팅 자료를 기다리는 중입니다.",
   startedAt: "2026-03-18T03:00:00Z"
-};
-
-const panelStyle: CSSProperties = {
-  background: "#111827",
-  border: "1px solid #1f2937",
-  borderRadius: 16,
-  padding: 20
-};
-
-const inputStyle: CSSProperties = {
-  width: "100%",
-  padding: "10px 12px",
-  borderRadius: 10,
-  border: "1px solid #334155",
-  background: "#020617",
-  color: "#e2e8f0"
 };
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -77,37 +61,38 @@ export function OnboardingClient() {
   const [items, setItems] = useState<OnboardingSummary[]>([]);
   const [selectedLeadId, setSelectedLeadId] = useState<number | null>(null);
   const [detail, setDetail] = useState<OnboardingDetail | null>(null);
-  const [statusMessage, setStatusMessage] = useState("Loading onboarding workspace.");
-  const [isLoading, setIsLoading] = useState(true);
+  const [draftStatus, setDraftStatus] = useState("IN_PROGRESS");
+  const [draftNextAction, setDraftNextAction] = useState("");
+  const [draftNotes, setDraftNotes] = useState("");
+  const [statusMessage, setStatusMessage] = useState("온보딩 데이터를 불러오는 중입니다.");
 
   useEffect(() => {
     void loadItems();
   }, []);
 
   async function loadItems(preferredLeadId?: number | null) {
-    setIsLoading(true);
-
     try {
       const nextItems = await request<OnboardingSummary[]>("/onboarding");
       setItems(nextItems);
       const nextLeadId =
-        nextItems.find((item) => item.leadId === preferredLeadId)?.leadId ??
-        nextItems[0]?.leadId ??
-        null;
+        nextItems.find((item) => item.leadId === preferredLeadId)?.leadId ?? nextItems[0]?.leadId ?? null;
       setSelectedLeadId(nextLeadId);
+
       if (nextLeadId) {
         await loadDetail(nextLeadId);
       } else {
         setDetail(null);
       }
-      setStatusMessage("Loaded onboarding data from API.");
+
+      setStatusMessage("API에서 최신 온보딩 데이터를 불러왔습니다.");
     } catch {
       setItems(fallbackItems);
       setSelectedLeadId(fallbackDetail.leadId);
       setDetail(fallbackDetail);
-      setStatusMessage("API unavailable, showing fallback onboarding data.");
-    } finally {
-      setIsLoading(false);
+      setDraftStatus(fallbackDetail.onboardingStatus);
+      setDraftNextAction(fallbackDetail.nextAction ?? "");
+      setDraftNotes(fallbackDetail.notes ?? "");
+      setStatusMessage("API 연결이 없어 예시 온보딩 데이터를 표시 중입니다.");
     }
   }
 
@@ -115,95 +100,60 @@ export function OnboardingClient() {
     try {
       const nextDetail = await request<OnboardingDetail>(`/onboarding/${leadId}`);
       setDetail(nextDetail);
+      setDraftStatus(nextDetail.onboardingStatus);
+      setDraftNextAction(nextDetail.nextAction ?? "");
+      setDraftNotes(nextDetail.notes ?? "");
     } catch {
-      setDetail(
-        leadId === fallbackDetail.leadId
-          ? fallbackDetail
-          : {
-              leadId,
-              displayName: "Unknown lead",
-              handle: "@unknown",
-              platform: "UNKNOWN",
-              onboardingStatus: "NOT_STARTED"
-            }
-      );
+      setDetail(fallbackDetail);
+      setDraftStatus(fallbackDetail.onboardingStatus);
+      setDraftNextAction(fallbackDetail.nextAction ?? "");
+      setDraftNotes(fallbackDetail.notes ?? "");
     }
   }
 
-  async function handleStart() {
-    if (!detail) {
+  async function saveOnboarding() {
+    if (!selectedLeadId) {
       return;
     }
 
     try {
-      const nextDetail = await request<OnboardingDetail>("/onboarding/start", {
-        method: "POST",
-        body: JSON.stringify({
-          leadId: detail.leadId,
-          onboardingStatus: detail.onboardingStatus === "NOT_STARTED" ? "IN_PROGRESS" : detail.onboardingStatus,
-          nextAction: detail.nextAction,
-          notes: detail.notes
-        })
-      });
-      setDetail(nextDetail);
-      await loadItems(detail.leadId);
-      setStatusMessage("Onboarding started.");
-    } catch {
-      setStatusMessage("API will enable onboarding start once available.");
-    }
-  }
-
-  async function handleSave() {
-    if (!detail) {
-      return;
-    }
-
-    try {
-      const nextDetail = await request<OnboardingDetail>(`/onboarding/${detail.leadId}`, {
+      const nextDetail = await request<OnboardingDetail>(`/onboarding/${selectedLeadId}`, {
         method: "PATCH",
         body: JSON.stringify({
-          onboardingStatus: detail.onboardingStatus,
-          nextAction: detail.nextAction,
-          notes: detail.notes
+          onboardingStatus: draftStatus,
+          nextAction: draftNextAction,
+          notes: draftNotes
         })
       });
+
       setDetail(nextDetail);
-      await loadItems(detail.leadId);
-      setStatusMessage("Onboarding detail updated.");
+      await loadItems(selectedLeadId);
+      setStatusMessage("온보딩 상태를 업데이트했습니다.");
     } catch {
-      setStatusMessage("API will enable onboarding updates once available.");
+      setStatusMessage("온보딩 상태 업데이트에 실패했습니다.");
     }
   }
 
   return (
-    <main style={{ padding: 32, display: "grid", gap: 20 }}>
-      <section
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center"
-        }}
-      >
+    <main style={pageStyle}>
+      <section style={heroStyle}>
         <div>
-          <h1 style={{ marginBottom: 8 }}>Onboarding</h1>
-          <p style={{ margin: 0, color: "#94a3b8" }}>
-            Track seller onboarding status, next actions, and notes after approval.
+          <div style={eyebrowStyle}>Onboarding</div>
+          <h1 style={titleStyle}>셀러 온보딩 관리</h1>
+          <p style={descriptionStyle}>
+            CRM 이후 단계에서 필요한 다음 액션과 메모를 관리하고 현재 온보딩 상태를 업데이트할 수 있습니다.
           </p>
         </div>
-        <div style={{ color: "#7dd3fc" }}>{isLoading ? "Loading..." : statusMessage}</div>
+        <div style={statusStyle}>{statusMessage}</div>
       </section>
 
-      <section
-        style={{
-          display: "grid",
-          gridTemplateColumns: "360px 1fr",
-          gap: 20,
-          alignItems: "start"
-        }}
-      >
-        <aside style={panelStyle}>
-          <h2 style={{ marginTop: 0 }}>Onboarding Queue</h2>
-          <div style={{ display: "grid", gap: 10 }}>
+      <section style={layoutStyle}>
+        <article style={panelStyle}>
+          <div style={headerRowStyle}>
+            <h2 style={sectionTitleStyle}>온보딩 목록</h2>
+            <span style={badgeStyle}>{items.length}건</span>
+          </div>
+          <div style={listStyle}>
             {items.map((item) => (
               <button
                 key={item.leadId}
@@ -213,173 +163,278 @@ export function OnboardingClient() {
                   void loadDetail(item.leadId);
                 }}
                 style={{
-                  textAlign: "left",
-                  padding: 14,
-                  borderRadius: 12,
-                  border:
-                    selectedLeadId === item.leadId ? "1px solid #38bdf8" : "1px solid #1f2937",
-                  background: selectedLeadId === item.leadId ? "#082f49" : "#020617",
-                  color: "#e2e8f0",
-                  cursor: "pointer"
+                  ...itemButtonStyle,
+                  borderColor: item.leadId === selectedLeadId ? "#38bdf8" : "#1e293b"
                 }}
               >
-                <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
+                <div style={rowStyle}>
                   <strong>{item.displayName}</strong>
-                  <span style={badgeStyle}>{item.onboardingStatus}</span>
+                  <span style={tagStyle}>{item.onboardingStatus}</span>
                 </div>
-                <div style={{ color: "#94a3b8", marginTop: 4 }}>
-                  {item.handle} / {item.platform}
+                <div style={mutedTextStyle}>
+                  {item.handle} · {item.platform}
                 </div>
-                {item.nextAction ? (
-                  <div style={{ color: "#cbd5e1", fontSize: 13, marginTop: 10 }}>
-                    Next: {item.nextAction}
-                  </div>
-                ) : null}
+                <div style={summaryTextStyle}>{item.nextAction ?? "다음 액션 없음"}</div>
               </button>
             ))}
-            {items.length === 0 ? (
-              <div style={{ color: "#94a3b8" }}>No onboarding items yet.</div>
-            ) : null}
           </div>
-        </aside>
+        </article>
 
-        <section style={panelStyle}>
+        <article style={panelStyle}>
           {detail ? (
-            <div style={{ display: "grid", gap: 16 }}>
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "start",
-                  gap: 16
-                }}
-              >
+            <div style={detailGridStyle}>
+              <div style={rowStyle}>
                 <div>
-                  <h2 style={{ marginTop: 0, marginBottom: 6 }}>{detail.displayName}</h2>
-                  <div style={{ color: "#94a3b8" }}>
-                    {detail.handle} / {detail.platform} / CRM {detail.crmStage ?? "N/A"}
+                  <h2 style={sectionTitleStyle}>{detail.displayName}</h2>
+                  <div style={mutedTextStyle}>
+                    {detail.handle} · {detail.platform} · CRM {detail.crmStage ?? "-"}
                   </div>
                 </div>
-                <div style={{ display: "flex", gap: 8 }}>
-                  <button type="button" style={secondaryButtonStyle} onClick={handleStart}>
-                    Start
-                  </button>
-                  <button type="button" style={primaryButtonStyle} onClick={handleSave}>
-                    Save
-                  </button>
+                <span style={tagStyle}>{detail.onboardingStatus}</span>
+              </div>
+
+              <div style={statsGridStyle}>
+                <div style={statCardStyle}>
+                  <span style={mutedTextStyle}>시작 시각</span>
+                  <strong>
+                    {detail.startedAt ? new Date(detail.startedAt).toLocaleString("ko-KR") : "-"}
+                  </strong>
+                </div>
+                <div style={statCardStyle}>
+                  <span style={mutedTextStyle}>업데이트 시각</span>
+                  <strong>
+                    {detail.updatedAt ? new Date(detail.updatedAt).toLocaleString("ko-KR") : "-"}
+                  </strong>
                 </div>
               </div>
 
-              <div style={itemCardStyle}>
-                <strong>Status</strong>
+              <label style={fieldStyle}>
+                <span>온보딩 상태</span>
                 <select
-                  value={detail.onboardingStatus}
-                  onChange={(event) =>
-                    setDetail((prev) =>
-                      prev
-                        ? {
-                            ...prev,
-                            onboardingStatus: event.target.value
-                          }
-                        : prev
-                    )
-                  }
-                  style={{ ...inputStyle, marginTop: 12 }}
+                  style={inputStyle}
+                  value={draftStatus}
+                  onChange={(event) => setDraftStatus(event.target.value)}
                 >
                   <option value="NOT_STARTED">NOT_STARTED</option>
                   <option value="IN_PROGRESS">IN_PROGRESS</option>
-                  <option value="READY_FOR_LISTING">READY_FOR_LISTING</option>
+                  <option value="WAITING_SELLER">WAITING_SELLER</option>
                   <option value="COMPLETED">COMPLETED</option>
                 </select>
-              </div>
+              </label>
 
-              <div style={itemCardStyle}>
-                <strong>Next Action</strong>
+              <label style={fieldStyle}>
+                <span>다음 액션</span>
                 <input
-                  value={detail.nextAction ?? ""}
-                  onChange={(event) =>
-                    setDetail((prev) =>
-                      prev
-                        ? {
-                            ...prev,
-                            nextAction: event.target.value
-                          }
-                        : prev
-                    )
-                  }
-                  style={{ ...inputStyle, marginTop: 12 }}
+                  style={inputStyle}
+                  value={draftNextAction}
+                  onChange={(event) => setDraftNextAction(event.target.value)}
+                  placeholder="예: 상품 카탈로그 요청"
                 />
-              </div>
+              </label>
 
-              <div style={itemCardStyle}>
-                <strong>Notes</strong>
+              <label style={fieldStyle}>
+                <span>메모</span>
                 <textarea
-                  value={detail.notes ?? ""}
-                  onChange={(event) =>
-                    setDetail((prev) =>
-                      prev
-                        ? {
-                            ...prev,
-                            notes: event.target.value
-                          }
-                        : prev
-                    )
-                  }
-                  style={{ ...inputStyle, marginTop: 12, minHeight: 180 }}
+                  style={textareaStyle}
+                  value={draftNotes}
+                  onChange={(event) => setDraftNotes(event.target.value)}
+                  placeholder="온보딩 진행 메모"
                 />
-              </div>
+              </label>
 
-              <div style={itemCardStyle}>
-                <strong>Timeline</strong>
-                <div style={{ color: "#94a3b8", marginTop: 10 }}>
-                  Started: {detail.startedAt ? new Date(detail.startedAt).toLocaleString("ko-KR") : "Not started"}
-                </div>
-                <div style={{ color: "#94a3b8", marginTop: 6 }}>
-                  Updated: {detail.updatedAt ? new Date(detail.updatedAt).toLocaleString("ko-KR") : "N/A"}
-                </div>
-              </div>
+              <button type="button" style={primaryButtonStyle} onClick={() => void saveOnboarding()}>
+                온보딩 업데이트
+              </button>
             </div>
           ) : (
-            <p style={{ color: "#94a3b8" }}>Select an onboarding item to continue.</p>
+            <div style={emptyStyle}>왼쪽 목록에서 온보딩 대상을 선택해주세요.</div>
           )}
-        </section>
+        </article>
       </section>
     </main>
   );
 }
 
-const itemCardStyle: CSSProperties = {
-  background: "#020617",
-  border: "1px solid #1f2937",
-  borderRadius: 12,
-  padding: 14
+const pageStyle: CSSProperties = {
+  minHeight: "100vh",
+  padding: 32,
+  background:
+    "radial-gradient(circle at top right, rgba(236, 72, 153, 0.12), transparent 24%), #020617",
+  color: "#e2e8f0",
+  display: "grid",
+  gap: 20
+};
+
+const heroStyle: CSSProperties = {
+  background: "rgba(15, 23, 42, 0.92)",
+  border: "1px solid #1e293b",
+  borderRadius: 24,
+  padding: 28,
+  display: "flex",
+  justifyContent: "space-between",
+  gap: 24,
+  alignItems: "flex-end"
+};
+
+const eyebrowStyle: CSSProperties = {
+  color: "#f472b6",
+  fontSize: 13,
+  letterSpacing: 1.2,
+  textTransform: "uppercase"
+};
+
+const titleStyle: CSSProperties = {
+  margin: "12px 0 10px",
+  fontSize: 36
+};
+
+const descriptionStyle: CSSProperties = {
+  margin: 0,
+  color: "#94a3b8",
+  maxWidth: 760,
+  lineHeight: 1.7
+};
+
+const statusStyle: CSSProperties = {
+  color: "#f9a8d4",
+  fontSize: 14,
+  maxWidth: 320,
+  textAlign: "right"
+};
+
+const layoutStyle: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "minmax(280px, 360px) minmax(0, 1fr)",
+  gap: 20
+};
+
+const panelStyle: CSSProperties = {
+  background: "rgba(15, 23, 42, 0.92)",
+  border: "1px solid #1e293b",
+  borderRadius: 22,
+  padding: 24,
+  display: "grid",
+  gap: 16
+};
+
+const headerRowStyle: CSSProperties = {
+  display: "flex",
+  justifyContent: "space-between",
+  gap: 12,
+  alignItems: "center"
+};
+
+const sectionTitleStyle: CSSProperties = {
+  margin: 0,
+  fontSize: 22
 };
 
 const badgeStyle: CSSProperties = {
-  padding: "4px 10px",
+  padding: "6px 10px",
   borderRadius: 999,
-  background: "#0f172a",
+  background: "#500724",
+  color: "#f9a8d4",
+  fontSize: 13
+};
+
+const listStyle: CSSProperties = {
+  display: "grid",
+  gap: 12
+};
+
+const itemButtonStyle: CSSProperties = {
+  display: "grid",
+  gap: 8,
+  padding: 16,
+  borderRadius: 16,
   border: "1px solid #1e293b",
+  background: "#020617",
+  color: "#e2e8f0",
+  textAlign: "left",
+  cursor: "pointer"
+};
+
+const rowStyle: CSSProperties = {
+  display: "flex",
+  justifyContent: "space-between",
+  gap: 12,
+  alignItems: "center"
+};
+
+const summaryTextStyle: CSSProperties = {
   color: "#cbd5e1",
+  lineHeight: 1.6
+};
+
+const mutedTextStyle: CSSProperties = {
+  color: "#94a3b8",
+  fontSize: 14
+};
+
+const tagStyle: CSSProperties = {
+  padding: "5px 9px",
+  borderRadius: 999,
+  background: "#500724",
+  color: "#f9a8d4",
   fontSize: 12
 };
 
+const detailGridStyle: CSSProperties = {
+  display: "grid",
+  gap: 16
+};
+
+const statsGridStyle: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+  gap: 12
+};
+
+const statCardStyle: CSSProperties = {
+  display: "grid",
+  gap: 6,
+  background: "#020617",
+  border: "1px solid #1e293b",
+  borderRadius: 16,
+  padding: 16
+};
+
+const fieldStyle: CSSProperties = {
+  display: "grid",
+  gap: 8,
+  fontSize: 14,
+  color: "#cbd5e1"
+};
+
+const inputStyle: CSSProperties = {
+  width: "100%",
+  borderRadius: 12,
+  border: "1px solid #334155",
+  background: "#020617",
+  color: "#e2e8f0",
+  padding: "11px 12px"
+};
+
+const textareaStyle: CSSProperties = {
+  ...inputStyle,
+  minHeight: 180,
+  resize: "vertical"
+};
+
 const primaryButtonStyle: CSSProperties = {
-  padding: "10px 14px",
-  borderRadius: 10,
-  border: "none",
-  background: "#0ea5e9",
-  color: "#082f49",
+  border: 0,
+  borderRadius: 12,
+  padding: "12px 16px",
+  background: "#f472b6",
+  color: "#500724",
   fontWeight: 700,
   cursor: "pointer"
 };
 
-const secondaryButtonStyle: CSSProperties = {
-  padding: "10px 14px",
-  borderRadius: 10,
-  border: "1px solid #334155",
-  background: "#111827",
-  color: "#e2e8f0",
-  fontWeight: 700,
-  cursor: "pointer"
+const emptyStyle: CSSProperties = {
+  borderRadius: 16,
+  border: "1px dashed #334155",
+  padding: 18,
+  color: "#94a3b8",
+  textAlign: "center"
 };

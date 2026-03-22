@@ -1,7 +1,8 @@
-import { Injectable } from "@nestjs/common";
+import { ConflictException, Injectable } from "@nestjs/common";
 import { resolve } from "node:path";
 import { Prisma } from "@prisma/client";
 import { readJsonFile, writeJsonFile } from "../../common/json-file-store";
+import { isDatabaseStorageEnabled, isDevSeedEnabled } from "../../common/runtime-flags";
 import { PrismaService } from "../../prisma/prisma.service";
 import { AuditLogService } from "../audit-log/audit-log.service";
 import { LeadsService } from "../leads/leads.service";
@@ -32,7 +33,8 @@ type OutreachState = {
 @Injectable()
 export class OutreachService {
   private readonly stateFilePath = resolve(process.cwd(), ".data", "outreach.json");
-  private readonly databaseEnabled = Boolean(process.env.DATABASE_URL?.trim());
+  private readonly databaseEnabled = isDatabaseStorageEnabled();
+  private readonly devSeedEnabled = isDevSeedEnabled();
   private nextMessageId = 3;
   private seedPromise: Promise<void> | null = null;
 
@@ -76,6 +78,7 @@ export class OutreachService {
     return Promise.all(
       candidates.map(async (lead) => {
         const message = await this.findOrCreateMessage(lead.id);
+        const safety = this.buildSafetyState(lead, message);
 
         return {
           leadId: lead.id,
@@ -87,7 +90,8 @@ export class OutreachService {
           subject: message.subject,
           previewText: message.body.slice(0, 80),
           approvedAt: message.approvedAt,
-          sentAt: message.sentAt
+          sentAt: message.sentAt,
+          safetyChecks: safety.safetyChecks
         };
       })
     );
@@ -100,6 +104,7 @@ export class OutreachService {
 
     const lead = await this.leadsService.findOne(leadId);
     const message = await this.findOrCreateMessage(leadId);
+    const safety = this.buildSafetyState(lead, message);
 
     return {
       leadId,
@@ -108,10 +113,11 @@ export class OutreachService {
       subject: message.subject,
       body: message.body,
       deliveryStatus: message.deliveryStatus,
-      recommendedAction:
-        message.channel === "EMAIL"
-          ? "Approve the email draft and send it"
-          : "Queue the DM for manual sending"
+      recommendedAction: this.buildRecommendedAction(message.channel, safety),
+      safetyChecks: safety.safetyChecks,
+      canApprove: safety.canApprove,
+      canSendEmail: safety.canSendEmail,
+      canQueueDm: safety.canQueueDm
     };
   }
 
@@ -119,7 +125,19 @@ export class OutreachService {
     leadId: number,
     payload?: ApproveOutreachDto
   ): Promise<OutreachPreviewDto> {
+    const lead = await this.leadsService.findOne(leadId);
     const message = await this.findOrCreateMessage(leadId);
+    const safety = this.buildSafetyState(lead, message);
+
+    if (!payload?.confirmed) {
+      throw new ConflictException("Approval confirmation is required.");
+    }
+
+    if (!safety.canApprove) {
+      throw new ConflictException(
+        safety.safetyChecks[0] ?? "This outreach draft cannot be approved."
+      );
+    }
 
     if (this.databaseEnabled) {
       await this.prisma.outreachMessage.update({
@@ -143,6 +161,7 @@ export class OutreachService {
       entityType: "OUTREACH_MESSAGE",
       entityId: leadId,
       actionType: "OUTREACH_APPROVED",
+      actor: payload?.actor,
       summary: "아웃리치 초안 승인",
       detail: `채널: ${payload?.channel ?? message.channel}`
     });
@@ -154,7 +173,19 @@ export class OutreachService {
     leadId: number,
     payload?: SendEmailDto
   ): Promise<OutreachPreviewDto> {
+    const lead = await this.leadsService.findOne(leadId);
     const message = await this.findOrCreateMessage(leadId);
+    const safety = this.buildSafetyState(lead, message);
+
+    if (!payload?.confirmed) {
+      throw new ConflictException("Final send confirmation is required.");
+    }
+
+    if (!safety.canSendEmail) {
+      throw new ConflictException(
+        safety.safetyChecks[0] ?? "This outreach email cannot be sent yet."
+      );
+    }
 
     if (this.databaseEnabled) {
       await this.prisma.outreachMessage.update({
@@ -186,6 +217,7 @@ export class OutreachService {
       entityType: "OUTREACH_MESSAGE",
       entityId: leadId,
       actionType: "OUTREACH_SENT",
+      actor: payload?.actor,
       summary: "이메일 발송 처리",
       detail: payload?.subject ?? message.subject
     });
@@ -197,7 +229,19 @@ export class OutreachService {
     leadId: number,
     payload?: QueueDmDto
   ): Promise<OutreachPreviewDto> {
+    const lead = await this.leadsService.findOne(leadId);
     const message = await this.findOrCreateMessage(leadId, "DM");
+    const safety = this.buildSafetyState(lead, message);
+
+    if (!payload?.confirmed) {
+      throw new ConflictException("DM queue confirmation is required.");
+    }
+
+    if (!safety.canQueueDm) {
+      throw new ConflictException(
+        safety.safetyChecks[0] ?? "This DM cannot be queued yet."
+      );
+    }
 
     if (this.databaseEnabled) {
       await this.prisma.outreachMessage.update({
@@ -225,6 +269,7 @@ export class OutreachService {
       entityType: "OUTREACH_MESSAGE",
       entityId: leadId,
       actionType: "OUTREACH_DM_QUEUED",
+      actor: payload?.actor,
       summary: "DM 큐 등록",
       detail: "수동 발송 대기 상태로 이동했습니다."
     });
@@ -320,6 +365,73 @@ export class OutreachService {
     return `Hello ${displayName}, we reviewed your ${platform} presence in ${category ?? "beauty"} and think there may be a strong Amazon marketplace fit. If you are open to it, we would love to discuss a lightweight partnership opportunity.`;
   }
 
+  private buildSafetyState(
+    lead: Awaited<ReturnType<LeadsService["findOne"]>>,
+    message: OutreachMessageRecord
+  ) {
+    const safetyChecks: string[] = [];
+    const hasEmailContact = lead.contacts.some(
+      (contact) => contact.contactType === "EMAIL" && Boolean(contact.contactValue.trim())
+    );
+    const isDoNotContact = lead.leadStatus === "DO_NOT_CONTACT";
+    const wasAlreadySent = Boolean(message.sentAt);
+    const isAlreadyQueued = message.deliveryStatus === "QUEUED";
+    const requiresApproval = message.deliveryStatus !== "APPROVED";
+
+    if (isDoNotContact) {
+      safetyChecks.push("Lead is marked as DO_NOT_CONTACT.");
+    }
+
+    if (!hasEmailContact) {
+      safetyChecks.push("Primary email contact is missing.");
+    }
+
+    if (wasAlreadySent) {
+      safetyChecks.push("A message has already been sent for this lead.");
+    }
+
+    if (isAlreadyQueued) {
+      safetyChecks.push("A DM is already queued for manual sending.");
+    }
+
+    if (requiresApproval && !wasAlreadySent && !isAlreadyQueued) {
+      safetyChecks.push("Draft approval is required before send or queue.");
+    }
+
+    return {
+      safetyChecks,
+      canApprove: !isDoNotContact && !wasAlreadySent && !isAlreadyQueued,
+      canSendEmail:
+        !isDoNotContact && hasEmailContact && message.deliveryStatus === "APPROVED" && !wasAlreadySent,
+      canQueueDm:
+        !isDoNotContact && message.deliveryStatus === "APPROVED" && !wasAlreadySent && !isAlreadyQueued
+    };
+  }
+
+  private buildRecommendedAction(
+    channel: string,
+    safety: {
+      safetyChecks: string[];
+      canApprove: boolean;
+      canSendEmail: boolean;
+      canQueueDm: boolean;
+    }
+  ) {
+    if (safety.canSendEmail && channel === "EMAIL") {
+      return "Approve the email draft and send it";
+    }
+
+    if (safety.canQueueDm && channel === "DM") {
+      return "Queue the DM for manual sending";
+    }
+
+    if (safety.canApprove) {
+      return "Approve the draft before any send action";
+    }
+
+    return "Resolve the safety checks before continuing";
+  }
+
   private loadState() {
     const state = readJsonFile<OutreachState | null>(this.stateFilePath, null);
 
@@ -339,7 +451,7 @@ export class OutreachService {
   }
 
   private async ensureDatabaseSeed() {
-    if (!this.databaseEnabled) {
+    if (!this.databaseEnabled || !this.devSeedEnabled) {
       return;
     }
 

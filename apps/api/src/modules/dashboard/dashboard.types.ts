@@ -19,10 +19,17 @@ export interface DashboardOnboardingItemDto {
   updatedAt?: string;
 }
 
+export interface DashboardStorageDto {
+  storageMode: "DATABASE" | "JSON_FALLBACK";
+  devSeedEnabled: boolean;
+  databaseUrlConfigured: boolean;
+}
+
 export interface DashboardDto {
   metrics: DashboardMetricDto[];
   leadStatusCounts: DashboardCountDto[];
   crmStageCounts: DashboardCountDto[];
   onboardingItems: DashboardOnboardingItemDto[];
   recentActivity: AuditLogItemDto[];
+  storage: DashboardStorageDto;
 }

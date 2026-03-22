@@ -22,8 +22,46 @@ model Campaign {
   scoringRuleSets        ScoringRuleSet[]
   reviewChecklistTemplates ReviewChecklistTemplate[]
   leads                  Lead[]
+  discoveryRuns          DiscoveryRun[]
 
   @@map("campaigns")
+}
+
+model DiscoveryRun {
+  id             BigInt              @id @default(autoincrement())
+  campaignId     BigInt              @map("campaign_id")
+  platform       String              @db.VarChar(40)
+  sourceSnapshot Json                @map("source_snapshot")
+  status         String              @db.VarChar(30)
+  requestedBy    String?             @map("requested_by") @db.VarChar(120)
+  summaryJson    Json?               @map("summary_json")
+  errorJson      Json?               @map("error_json")
+  startedAt      DateTime            @default(now()) @map("started_at") @db.Timestamptz(6)
+  finishedAt     DateTime?           @map("finished_at") @db.Timestamptz(6)
+  createdAt      DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime            @default(now()) @map("updated_at") @db.Timestamptz(6)
+  campaign       Campaign            @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  candidates     DiscoveryCandidate[]
+
+  @@index([campaignId, status], map: "idx_discovery_runs_campaign_status")
+  @@map("discovery_runs")
+}
+
+model DiscoveryCandidate {
+  id                 BigInt       @id @default(autoincrement())
+  runId              BigInt       @map("run_id")
+  externalSourceType String       @map("external_source_type") @db.VarChar(40)
+  externalId         String?      @map("external_id") @db.VarChar(255)
+  handle             String?      @db.VarChar(120)
+  payloadJson        Json         @map("payload_json")
+  normalizedJson     Json         @map("normalized_json")
+  decisionStatus     String       @default("PENDING") @map("decision_status") @db.VarChar(30)
+  createdAt          DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  run                DiscoveryRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([runId], map: "idx_discovery_candidates_run_id")
+  @@index([handle], map: "idx_discovery_candidates_handle")
+  @@map("discovery_candidates")
 }
 
 model CampaignSource {
